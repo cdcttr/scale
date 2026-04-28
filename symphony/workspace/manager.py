@@ -4,7 +4,6 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from symphony.config.schema import WorkflowConfig
 from symphony.tracker.models import Issue
