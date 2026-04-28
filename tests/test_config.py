@@ -1,4 +1,7 @@
+import os
+import textwrap
 import pytest
+from pathlib import Path
 from pydantic import ValidationError
 from symphony.config.schema import (
     WorkflowConfig, TrackerConfig, AgentConfig,
@@ -36,3 +39,59 @@ def test_agent_config_per_state_defaults():
 def test_codex_approval_policy_only_auto():
     with pytest.raises(ValidationError):
         CodexConfig(approval_policy="manual")
+
+
+from symphony.config.loader import load_workflow, resolve_vars
+
+def test_resolve_vars_substitutes_env(monkeypatch):
+    monkeypatch.setenv("MY_TOKEN", "secret123")
+    assert resolve_vars("$MY_TOKEN") == "secret123"
+
+def test_resolve_vars_non_var_passthrough():
+    assert resolve_vars("plain-string") == "plain-string"
+
+def test_resolve_vars_missing_env_raises(monkeypatch):
+    monkeypatch.delenv("MISSING_VAR", raising=False)
+    with pytest.raises(ValueError, match="MISSING_VAR"):
+        resolve_vars("$MISSING_VAR")
+
+def test_resolve_vars_nested(monkeypatch):
+    monkeypatch.setenv("TOK", "abc")
+    data = {"tracker": {"api_token": "$TOK", "repo": "o/r"}}
+    result = resolve_vars(data)
+    assert result["tracker"]["api_token"] == "abc"
+
+def test_load_workflow_parses_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "tok123")
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text(textwrap.dedent("""\
+        ---
+        tracker:
+          kind: github
+          repo: owner/repo
+          api_token: $GH_TOKEN
+        ---
+        You are working on {{ issue.title }}.
+    """))
+    cfg = load_workflow(wf)
+    assert cfg.tracker.api_token == "tok123"
+    assert cfg.tracker.repo == "owner/repo"
+    assert "{{ issue.title }}" in cfg.prompt_template
+
+def test_load_workflow_resolves_relative_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text(textwrap.dedent("""\
+        ---
+        tracker:
+          kind: github
+          repo: o/r
+          api_token: $GH_TOKEN
+        workspace:
+          root: ./workspaces
+        ---
+        prompt
+    """))
+    cfg = load_workflow(wf)
+    assert cfg.workspace.root == str(tmp_path / "workspaces")
+    assert os.path.isabs(cfg.workspace.root)
