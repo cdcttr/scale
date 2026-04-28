@@ -1,0 +1,75 @@
+from __future__ import annotations
+import argparse
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+
+def _setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
+
+
+async def _run(workflow_path: Path, port: int | None) -> None:
+    from symphony.config.loader import load_workflow
+    from symphony.tracker.github import GitHubClient
+    from symphony.orchestrator.core import Orchestrator
+
+    config = load_workflow(workflow_path)
+    tracker = GitHubClient(config.tracker)
+    orch = Orchestrator(config, tracker)
+
+    tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+
+    effective_port = port or (config.server.port if config.server else None)
+    if effective_port:
+        from symphony.api.server import create_app
+        import uvicorn
+        app = create_app(orch)
+        server_config = uvicorn.Config(
+            app, host="127.0.0.1", port=effective_port, log_level="warning"
+        )
+        server = uvicorn.Server(server_config)
+        tasks.append(asyncio.create_task(server.serve()))
+
+    if sys.stdout.isatty():
+        from symphony.dashboard.ui import Dashboard
+        dashboard = Dashboard(orch)
+        tasks.append(asyncio.create_task(dashboard.run()))
+
+    from symphony.config.watcher import watch_workflow
+
+    def _on_reload(new_config) -> None:
+        orch._config = new_config
+
+    tasks.append(asyncio.create_task(watch_workflow(workflow_path, _on_reload)))
+    tasks.append(asyncio.create_task(orch.run()))
+
+    await asyncio.gather(*tasks)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Symphony — Claude Code orchestrator")
+    parser.add_argument(
+        "workflow",
+        nargs="?",
+        default="WORKFLOW.md",
+        help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    parser.add_argument("--port", type=int, default=None, help="HTTP API port")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    args = parser.parse_args()
+    _setup_logging(args.log_level)
+    asyncio.run(_run(Path(args.workflow), args.port))
+
+
+if __name__ == "__main__":
+    main()
