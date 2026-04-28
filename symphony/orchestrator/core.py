@@ -86,7 +86,7 @@ class Orchestrator:
             logger.warning("State refresh failed, keeping workers running: %s", e)
             return
 
-        now = asyncio.get_event_loop().time()
+        now = datetime.now(tz=timezone.utc).timestamp()
         stall_s = self._config.codex.stall_timeout_ms / 1000
 
         async with self._lock:
@@ -166,7 +166,7 @@ class Orchestrator:
         def on_event(event: dict) -> None:
             session = self._state.running.get(issue.id)
             if session:
-                session.last_event_at = datetime.utcnow()
+                session.last_event_at = datetime.now(tz=timezone.utc)
                 if event.get("type") == "result":
                     usage = event.get("usage", {})
                     session.tokens.input_tokens = usage.get("input_tokens", 0)

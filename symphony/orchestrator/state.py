@@ -1,8 +1,7 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
 
 from symphony.tracker.models import Issue
 
@@ -21,8 +20,8 @@ class TokenTotals:
 class LiveSession:
     issue: Issue
     task: asyncio.Task  # type: ignore[type-arg]
-    started_at: datetime = field(default_factory=datetime.utcnow)
-    last_event_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_event_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     turn_count: int = 0
     tokens: TokenTotals = field(default_factory=TokenTotals)
     session_id: str = ""
