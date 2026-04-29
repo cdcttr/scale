@@ -131,3 +131,31 @@ async def test_run_turn_fires_on_event(tmp_path: Path):
         await _runner().run_turn(tmp_path, "prompt", False, on_event=seen.append)
     assert len(seen) == 2
     assert seen[0]["type"] == "assistant"
+
+
+def test_build_cmd_with_model():
+    runner = ClaudeRunner(CodexConfig())
+    cmd = runner._build_cmd("prompt", False, model="claude-haiku-4-5-20251001")
+    assert "--model" in cmd
+    idx = cmd.index("--model")
+    assert cmd[idx + 1] == "claude-haiku-4-5-20251001"
+
+
+def test_build_cmd_without_model_omits_flag():
+    runner = ClaudeRunner(CodexConfig())
+    cmd = runner._build_cmd("prompt", False, model=None)
+    assert "--model" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_run_turn_passes_model_to_cmd(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "Done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+        await _runner().run_turn(tmp_path, "prompt", False, model="claude-haiku-4-5-20251001")
+    cmd_args = mock_exec.call_args[0]
+    assert "--model" in cmd_args
+    idx = list(cmd_args).index("--model")
+    assert cmd_args[idx + 1] == "claude-haiku-4-5-20251001"
