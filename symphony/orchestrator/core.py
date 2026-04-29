@@ -12,6 +12,7 @@ from symphony.orchestrator.state import (
 from symphony.tracker.base import TrackerClient
 from symphony.tracker.models import Issue
 from symphony.worker.local import LocalWorker
+from symphony.worker.ssh import SSHWorker
 from symphony.workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,15 @@ class Orchestrator:
         self._lock = asyncio.Lock()
         self._workspace = WorkspaceManager(config)
         self._refresh_event = asyncio.Event()
+        self._ssh_index = 0
+
+    def _make_worker(self) -> LocalWorker | SSHWorker:
+        hosts = self._config.worker.ssh_hosts
+        if hosts:
+            host = hosts[self._ssh_index % len(hosts)]
+            self._ssh_index += 1
+            return SSHWorker(host, self._workspace, self._config)
+        return LocalWorker(self._workspace, self._config)
 
     def get_state(self) -> OrchestratorState:
         return self._state
@@ -173,14 +183,20 @@ class Orchestrator:
                     session.tokens.output_tokens = usage.get("output_tokens", 0)
 
         try:
-            worker = LocalWorker(self._workspace, self._config)
+            worker = self._make_worker()
             await worker.run(issue, self._config, attempt, on_event=on_event)
             async with self._lock:
-                self._state.running.pop(issue.id, None)
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
                 self._schedule_retry(issue, attempt=None, error="")
         except asyncio.CancelledError:
             async with self._lock:
-                self._state.running.pop(issue.id, None)
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
             raise
         except Exception as e:
             logger.error(
@@ -188,6 +204,9 @@ class Orchestrator:
                 issue.id, issue.identifier, e,
             )
             async with self._lock:
-                self._state.running.pop(issue.id, None)
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
                 current_attempt = (attempt or 0) + 1
                 self._schedule_retry(issue, attempt=current_attempt, error=str(e))

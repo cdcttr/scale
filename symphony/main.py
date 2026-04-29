@@ -53,20 +53,36 @@ async def _run(workflow_path: Path, port: int | None) -> None:
 
 
 def main() -> None:
+    from importlib.metadata import version as _pkg_version
     parser = argparse.ArgumentParser(description="Symphony — Claude Code orchestrator")
-    parser.add_argument(
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run_p = sub.add_parser("run", help="Start the Symphony daemon")
+    run_p.add_argument(
         "workflow",
         nargs="?",
         default="WORKFLOW.md",
         help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
     )
-    parser.add_argument("--port", type=int, default=None, help="HTTP API port")
-    parser.add_argument(
+    run_p.add_argument("--port", type=int, default=None, help="HTTP API port")
+    run_p.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+
+    sub.add_parser("version", help="Print version and exit")
+
     args = parser.parse_args()
+
+    if args.command == "version":
+        try:
+            ver = _pkg_version("symphony")
+        except Exception:
+            ver = "0.1.0"
+        print(f"symphony {ver}")
+        return
+
     _setup_logging(args.log_level)
     asyncio.run(_run(Path(args.workflow), args.port))
 
