@@ -123,14 +123,22 @@ class GitHubClient(TrackerClient):
         ]
 
     async def fetch_issue_comments(self, number: int) -> list[dict]:
+        results: list[dict] = []
+        page = 1
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.get(
-                f"{self._base}/issues/{number}/comments",
-                headers=self._headers,
-                params={"per_page": 100},
-            )
-            r.raise_for_status()
-            return r.json()
+            while True:
+                r = await client.get(
+                    f"{self._base}/issues/{number}/comments",
+                    headers=self._headers,
+                    params={"per_page": 100, "page": page},
+                )
+                r.raise_for_status()
+                data = r.json()
+                if not data:
+                    break
+                results.extend(data)
+                page += 1
+        return results
 
     async def post_comment(self, number: int, body: str) -> None:
         async with httpx.AsyncClient(timeout=30) as client:

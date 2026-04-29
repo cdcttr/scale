@@ -138,11 +138,13 @@ from urllib.parse import quote as _url_quote
 @pytest.mark.asyncio
 @respx.mock
 async def test_fetch_issue_comments_returns_list():
-    respx.get("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
-        return_value=httpx.Response(200, json=[
+    route = respx.get("https://api.github.com/repos/owner/repo/issues/42/comments")
+    route.side_effect = [
+        httpx.Response(200, json=[
             {"id": 1, "body": "comment text", "user": {"login": "alice"}, "created_at": "2026-01-01T00:00:00Z"},
-        ])
-    )
+        ]),
+        httpx.Response(200, json=[]),
+    ]
     client = GitHubClient(_config())
     comments = await client.fetch_issue_comments(42)
     assert len(comments) == 1
@@ -193,8 +195,10 @@ async def test_remove_label_success():
 @respx.mock
 async def test_remove_label_404_is_silent():
     encoded = _url_quote("symphony:ready", safe="")
-    respx.delete(
+    route = respx.delete(
         f"https://api.github.com/repos/owner/repo/issues/42/labels/{encoded}"
     ).mock(return_value=httpx.Response(404))
     client = GitHubClient(_config())
-    await client.remove_label(42, "symphony:ready")  # must not raise
+    result = await client.remove_label(42, "symphony:ready")
+    assert route.called
+    assert result is None
