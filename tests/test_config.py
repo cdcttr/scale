@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import ValidationError
 from symphony.config.schema import (
     WorkflowConfig, TrackerConfig, AgentConfig,
-    CodexConfig, WorkerConfig,
+    CodexConfig, WorkerConfig, TriageConfig,
 )
 
 def test_tracker_config_required_fields():
@@ -97,9 +97,6 @@ def test_load_workflow_resolves_relative_workspace(tmp_path, monkeypatch):
     assert os.path.isabs(cfg.workspace.root)
 
 
-from symphony.config.schema import TriageConfig, WorkflowConfig, TrackerConfig
-
-
 def test_triage_config_defaults():
     cfg = TriageConfig()
     assert cfg.model == "claude-haiku-4-5-20251001"
@@ -124,3 +121,5 @@ def test_workflow_config_triage_set():
     )
     assert wf.triage is not None
     assert wf.triage.model == "claude-sonnet-4-6"
+    assert wf.triage.ready_label == "symphony:ready"
+    assert wf.triage.triaged_label == "symphony:triaged"
