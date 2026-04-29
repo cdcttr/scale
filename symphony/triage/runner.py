@@ -1,8 +1,10 @@
 from __future__ import annotations
 import logging
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
-from symphony.config.schema import TriageConfig
+from symphony.config.schema import CodexConfig, TriageConfig
 from symphony.tracker.github import GitHubClient
 from symphony.tracker.models import Issue
 from symphony.triage.agent import TriageAgent, TriageAssessment
@@ -54,12 +56,13 @@ class TriageRunner:
     def __init__(
         self,
         config: TriageConfig,
+        codex: CodexConfig,
         client: GitHubClient,
         dry_run: bool = False,
     ) -> None:
         self._config = config
         self._client = client
-        self._agent = TriageAgent(config)
+        self._agent = TriageAgent(config, codex)
         self._dry_run = dry_run
 
     async def triage_issue(self, issue: Issue, force: bool = False) -> None:
@@ -70,7 +73,9 @@ class TriageRunner:
             log.info("Issue #%d is already current, skipping", issue.number)
             return
 
-        assessment = self._agent.assess(issue, comments)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assessment = await self._agent.assess(issue, comments, Path(tmpdir))
+
         if assessment is None:
             log.warning("Skipping issue #%d due to assessment failure", issue.number)
             return
