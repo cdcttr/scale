@@ -130,3 +130,71 @@ def test_identifier_format():
     issue = client._normalize(_gh_issue(number=42, title="Fix bug"))
     assert issue.identifier == "owner/repo#42"
     assert issue.branch_name == "symphony/42-fix-bug"
+
+
+from urllib.parse import quote as _url_quote
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_issue_comments_returns_list():
+    respx.get("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
+        return_value=httpx.Response(200, json=[
+            {"id": 1, "body": "comment text", "user": {"login": "alice"}, "created_at": "2026-01-01T00:00:00Z"},
+        ])
+    )
+    client = GitHubClient(_config())
+    comments = await client.fetch_issue_comments(42)
+    assert len(comments) == 1
+    assert comments[0]["body"] == "comment text"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_comment_sends_body():
+    import json as _json
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
+        return_value=httpx.Response(201, json={"id": 99, "body": "hello"})
+    )
+    client = GitHubClient(_config())
+    await client.post_comment(42, "hello")
+    assert route.called
+    sent = _json.loads(route.calls[0].request.content)
+    assert sent["body"] == "hello"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_add_labels_sends_labels():
+    import json as _json
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    client = GitHubClient(_config())
+    await client.add_labels(42, ["symphony:ready", "symphony:triaged"])
+    assert route.called
+    sent = _json.loads(route.calls[0].request.content)
+    assert "symphony:ready" in sent["labels"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_remove_label_success():
+    encoded = _url_quote("symphony:ready", safe="")
+    route = respx.delete(
+        f"https://api.github.com/repos/owner/repo/issues/42/labels/{encoded}"
+    ).mock(return_value=httpx.Response(200, json=[]))
+    client = GitHubClient(_config())
+    await client.remove_label(42, "symphony:ready")
+    assert route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_remove_label_404_is_silent():
+    encoded = _url_quote("symphony:ready", safe="")
+    respx.delete(
+        f"https://api.github.com/repos/owner/repo/issues/42/labels/{encoded}"
+    ).mock(return_value=httpx.Response(404))
+    client = GitHubClient(_config())
+    await client.remove_label(42, "symphony:ready")  # must not raise
