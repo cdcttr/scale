@@ -52,6 +52,13 @@ class WorkerConfig(BaseModel):
     max_concurrent_agents_per_host: int = 3
 
 
+class TriageConfig(BaseModel):
+    model: str = "claude-haiku-4-5-20251001"
+    ready_label: str = "symphony:ready"
+    needs_detail_label: str = "symphony:needs-detail"
+    triaged_label: str = "symphony:triaged"
+
+
 class WorkflowConfig(BaseModel):
     tracker: TrackerConfig
     polling: PollingConfig = Field(default_factory=PollingConfig)
@@ -61,4 +68,5 @@ class WorkflowConfig(BaseModel):
     codex: CodexConfig = Field(default_factory=CodexConfig)
     server: Optional[ServerConfig] = None
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
+    triage: Optional[TriageConfig] = None
     prompt_template: str = ""

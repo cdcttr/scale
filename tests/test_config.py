@@ -95,3 +95,32 @@ def test_load_workflow_resolves_relative_workspace(tmp_path, monkeypatch):
     cfg = load_workflow(wf)
     assert cfg.workspace.root == str(tmp_path / "workspaces")
     assert os.path.isabs(cfg.workspace.root)
+
+
+from symphony.config.schema import TriageConfig, WorkflowConfig, TrackerConfig
+
+
+def test_triage_config_defaults():
+    cfg = TriageConfig()
+    assert cfg.model == "claude-haiku-4-5-20251001"
+    assert cfg.ready_label == "symphony:ready"
+    assert cfg.needs_detail_label == "symphony:needs-detail"
+    assert cfg.triaged_label == "symphony:triaged"
+
+
+def test_workflow_config_triage_optional():
+    wf = WorkflowConfig(
+        tracker=TrackerConfig(repo="o/r", api_token="tok"),
+        prompt_template="Work on {{ issue.title }}.",
+    )
+    assert wf.triage is None
+
+
+def test_workflow_config_triage_set():
+    wf = WorkflowConfig(
+        tracker=TrackerConfig(repo="o/r", api_token="tok"),
+        prompt_template="Work on {{ issue.title }}.",
+        triage=TriageConfig(model="claude-sonnet-4-6"),
+    )
+    assert wf.triage is not None
+    assert wf.triage.model == "claude-sonnet-4-6"
