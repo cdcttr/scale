@@ -25,7 +25,7 @@ class WorkspaceManager:
     def _path(self, issue: Issue) -> Path:
         name = sanitize_identifier(issue.identifier)
         path = (self._root / name).resolve()
-        if not str(path).startswith(str(self._root.resolve())):
+        if not path.is_relative_to(self._root.resolve()):
             raise ValueError(f"Workspace path escapes root: {path}")
         return path
 
