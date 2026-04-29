@@ -52,6 +52,34 @@ async def _run(workflow_path: Path, port: int | None) -> None:
     await asyncio.gather(*tasks)
 
 
+async def _triage(
+    workflow_path: Path,
+    issue_numbers: list[int] | None,
+    force_all: bool,
+    model: str | None,
+    dry_run: bool,
+) -> None:
+    from symphony.config.loader import load_workflow
+    from symphony.config.schema import TriageConfig
+    from symphony.tracker.github import GitHubClient
+    from symphony.triage.runner import TriageRunner
+
+    config = load_workflow(workflow_path)
+    triage_config = config.triage or TriageConfig()
+    if model:
+        triage_config = triage_config.model_copy(update={"model": model})
+
+    tracker = GitHubClient(config.tracker)
+    runner = TriageRunner(triage_config, tracker, dry_run=dry_run)
+
+    if issue_numbers:
+        issues = await tracker.fetch_issues_by_numbers(issue_numbers)
+    else:
+        issues = await tracker.fetch_candidate_issues()
+
+    await runner.run(issues, force=force_all)
+
+
 def main() -> None:
     from importlib.metadata import version as _pkg_version
     parser = argparse.ArgumentParser(description="Symphony — Claude Code orchestrator")
@@ -73,6 +101,42 @@ def main() -> None:
 
     sub.add_parser("version", help="Print version and exit")
 
+    triage_p = sub.add_parser("triage", help="Assess issue readiness and apply labels")
+    triage_p.add_argument(
+        "workflow",
+        nargs="?",
+        default="WORKFLOW.md",
+        help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    triage_p.add_argument(
+        "--issue", "-i",
+        dest="issues",
+        default=None,
+        metavar="N[,N,...]",
+        help="Comma-separated issue numbers to triage",
+    )
+    triage_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="force_all",
+        help="Force re-triage all issues, even if already current",
+    )
+    triage_p.add_argument(
+        "--model",
+        default=None,
+        help="Override the LLM model for this run",
+    )
+    triage_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print assessment to stdout, do not post to GitHub or apply labels",
+    )
+    triage_p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -81,6 +145,16 @@ def main() -> None:
         except Exception:
             ver = "0.1.0"
         print(f"symphony {ver}")
+        return
+
+    if args.command == "triage":
+        _setup_logging(args.log_level)
+        issue_numbers = (
+            [int(n.strip()) for n in args.issues.split(",")]
+            if args.issues
+            else None
+        )
+        asyncio.run(_triage(Path(args.workflow), issue_numbers, args.force_all, args.model, args.dry_run))
         return
 
     _setup_logging(args.log_level)

@@ -331,3 +331,15 @@ async def test_fire_retries_reschedules_when_at_capacity():
     # Should have rescheduled, not dispatched
     assert issue.id not in orch._state.running
     assert any(e.issue.id == issue.id for e in orch._state.retry_queue)
+
+
+def test_triage_subcommand_help(capsys):
+    import sys
+    from unittest.mock import patch as mpatch
+    with mpatch.object(sys, "argv", ["symphony", "triage", "--help"]):
+        from symphony.main import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert "triage" in captured.out or "triage" in captured.err
