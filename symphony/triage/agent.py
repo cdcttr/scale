@@ -99,6 +99,10 @@ class TriageAgent:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text
+        except Exception as exc:
+            log.error("Triage API call failed for issue #%d: %s", issue.number, exc)
+            return None
+        try:
             data = json.loads(raw)
             return TriageAssessment(
                 ready=bool(data["ready"]),
@@ -107,5 +111,5 @@ class TriageAgent:
                 comment=data.get("comment", ""),
             )
         except Exception as exc:
-            log.error("Triage assessment failed for issue #%d: %s", issue.number, exc)
+            log.error("Triage JSON parse failed for issue #%d: %s\nRaw response: %s", issue.number, exc, raw)
             return None
