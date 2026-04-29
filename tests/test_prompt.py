@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 from symphony.tracker.models import Issue
-from symphony.prompt.renderer import render_prompt
+from symphony.prompt.renderer import render_prompt, _SAFETY_PREAMBLE
 
 def _issue(**kwargs) -> Issue:
     defaults = dict(
@@ -17,30 +17,35 @@ def _issue(**kwargs) -> Issue:
     defaults.update(kwargs)
     return Issue(**defaults)
 
+def test_render_always_includes_safety_preamble():
+    result = render_prompt("{{ issue.title }}", _issue(), attempt=None)
+    assert result.startswith(_SAFETY_PREAMBLE)
+
 def test_render_basic():
     template = "Issue: {{ issue.title }}"
     result = render_prompt(template, _issue(), attempt=None)
-    assert result == "Issue: Add dark mode"
+    assert "Issue: Add dark mode" in result
 
 def test_render_identifier():
     template = "Ref: {{ issue.identifier }}"
     result = render_prompt(template, _issue(), attempt=None)
-    assert result == "Ref: owner/repo#5"
+    assert "Ref: owner/repo#5" in result
 
 def test_render_labels_join():
     template = "Labels: {{ issue.labels | join: ', ' }}"
     result = render_prompt(template, _issue(), attempt=None)
-    assert result == "Labels: enhancement"
+    assert "Labels: enhancement" in result
 
 def test_render_attempt_none_no_block():
     template = "{% if attempt %}retry {{ attempt }}{% endif %}done"
     result = render_prompt(template, _issue(), attempt=None)
-    assert result == "done"
+    assert "done" in result
+    assert "retry" not in result
 
 def test_render_attempt_integer():
     template = "{% if attempt %}retry {{ attempt }}{% endif %}done"
     result = render_prompt(template, _issue(), attempt=2)
-    assert result == "retry 2done"
+    assert "retry 2" in result
 
 def test_render_unknown_variable_raises():
     template = "{{ unknown_var }}"
