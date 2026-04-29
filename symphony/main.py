@@ -70,7 +70,7 @@ async def _triage(
         triage_config = triage_config.model_copy(update={"model": model})
 
     tracker = GitHubClient(config.tracker)
-    runner = TriageRunner(triage_config, tracker, dry_run=dry_run)
+    runner = TriageRunner(triage_config, config.codex, tracker, dry_run=dry_run)
 
     if issue_numbers:
         issues = await tracker.fetch_issues_by_numbers(issue_numbers)
