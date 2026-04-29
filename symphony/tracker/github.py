@@ -66,8 +66,8 @@ class GitHubClient(TrackerClient):
             branch_name=f"symphony/{number}-{_slugify(title)}",
             url=item["html_url"],
             priority=_parse_priority(labels),
-            created_at=datetime.fromisoformat(item["created_at"].rstrip("Z")),
-            updated_at=datetime.fromisoformat(item["updated_at"].rstrip("Z")),
+            created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00")),
         )
 
     async def _paginate(self, client: httpx.AsyncClient, params: dict) -> list[dict]:
