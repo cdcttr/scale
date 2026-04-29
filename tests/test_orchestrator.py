@@ -1,9 +1,9 @@
 import asyncio
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from symphony.orchestrator.core import Orchestrator
-from symphony.orchestrator.state import LiveSession
+from symphony.orchestrator.state import LiveSession, RetryEntry
 from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig
 from symphony.tracker.models import Issue
 from symphony.worker.local import LocalWorker
@@ -155,3 +155,179 @@ def test_version_command(capsys):
         main()
     captured = capsys.readouterr()
     assert captured.out.startswith("symphony ")
+
+
+# ---------------------------------------------------------------------------
+# Startup cleanup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_startup_cleanup_removes_terminal_workspaces():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_terminal_issues.return_value = [issue]
+
+    orch = Orchestrator(_config(), tracker)
+    with patch.object(orch._workspace, "remove", AsyncMock()) as mock_remove:
+        await orch._startup_cleanup()
+
+    mock_remove.assert_called_once_with(issue, hooks_enabled=False)
+
+
+@pytest.mark.asyncio
+async def test_startup_cleanup_handles_tracker_error():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.side_effect = RuntimeError("network error")
+
+    orch = Orchestrator(_config(), tracker)
+    await orch._startup_cleanup()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Reconcile
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_cancels_stalled_session():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_issues_by_numbers.return_value = [issue]
+
+    orch = Orchestrator(_config(), tracker)
+    task = asyncio.create_task(asyncio.sleep(100))
+    session = LiveSession(issue=issue, task=task)
+    session.last_event_at = datetime.now(tz=timezone.utc) - timedelta(seconds=400)
+    orch._state.running[issue.id] = session
+    orch._state.claimed.add(issue.id)
+
+    await orch._reconcile()
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert any(e.error == "stall timeout" for e in orch._state.retry_queue)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_cancels_terminal_issue():
+    tracker = AsyncMock()
+    issue = _issue()
+    terminal = _issue(state="terminal")
+    tracker.fetch_issues_by_numbers.return_value = [terminal]
+
+    orch = Orchestrator(_config(), tracker)
+    task = asyncio.create_task(asyncio.sleep(100))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+
+    with patch.object(orch._workspace, "remove", AsyncMock()):
+        await orch._reconcile()
+        await asyncio.sleep(0)
+
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handles_tracker_error():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_issues_by_numbers.side_effect = RuntimeError("network error")
+
+    orch = Orchestrator(_config(), tracker)
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+
+    await orch._reconcile()  # must not raise
+    assert issue.id in orch._state.running  # worker kept running
+
+
+# ---------------------------------------------------------------------------
+# Tick — candidate fetch failure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_tick_handles_candidate_fetch_failure():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+    tracker.fetch_candidate_issues.side_effect = RuntimeError("API down")
+
+    orch = Orchestrator(_config(), tracker)
+    await orch._tick()  # must not raise
+    assert len(orch._state.running) == 0
+
+
+# ---------------------------------------------------------------------------
+# Fire retries
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fire_retries_dispatches_due_entry():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_issues_by_numbers.return_value = [issue]
+
+    orch = Orchestrator(_config(), tracker)
+    orch._state.claimed.add(issue.id)
+    orch._state.retry_queue.append(RetryEntry(
+        issue=issue,
+        attempt=1,
+        due_at=datetime.now(tz=timezone.utc) - timedelta(seconds=1),
+        error="prev failure",
+    ))
+
+    dispatched: list[str] = []
+
+    async def _noop(iss, attempt):
+        dispatched.append(iss.id)
+
+    with patch.object(orch, "_run_worker", side_effect=_noop):
+        await orch._fire_retries()
+
+    assert issue.id in dispatched or issue.id in orch._state.running
+
+
+@pytest.mark.asyncio
+async def test_fire_retries_drops_inactive_issue():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_issues_by_numbers.return_value = [_issue(state="terminal")]
+
+    orch = Orchestrator(_config(), tracker)
+    orch._state.claimed.add(issue.id)
+    orch._state.retry_queue.append(RetryEntry(
+        issue=issue,
+        attempt=1,
+        due_at=datetime.now(tz=timezone.utc) - timedelta(seconds=1),
+        error="prev failure",
+    ))
+
+    await orch._fire_retries()
+
+    assert issue.id not in orch._state.claimed
+    assert len(orch._state.retry_queue) == 0
+
+
+@pytest.mark.asyncio
+async def test_fire_retries_reschedules_when_at_capacity():
+    tracker = AsyncMock()
+    issue = _issue()
+    tracker.fetch_issues_by_numbers.return_value = [issue]
+
+    orch = Orchestrator(_config(max_concurrent_agents=1), tracker)
+    orch._state.claimed.add(issue.id)
+
+    # Fill the one slot with a different issue
+    other = _issue(id_="i2", number=2)
+    orch._state.running["i2"] = LiveSession(issue=other, task=MagicMock())
+
+    orch._state.retry_queue.append(RetryEntry(
+        issue=issue,
+        attempt=1,
+        due_at=datetime.now(tz=timezone.utc) - timedelta(seconds=1),
+        error="prev failure",
+    ))
+
+    await orch._fire_retries()
+
+    # Should have rescheduled, not dispatched
+    assert issue.id not in orch._state.running
+    assert any(e.issue.id == issue.id for e in orch._state.retry_queue)
