@@ -32,15 +32,16 @@ def _needs_triage(issue: Issue, comments: list[dict], force: bool) -> bool:
     triage_comments = [c for c in comments if c["body"].startswith(_MARKER_PREFIX)]
     if not triage_comments:
         return True
-    last_triage = max(triage_comments, key=lambda c: c["created_at"])
+    last_triage = max(
+        triage_comments,
+        key=lambda c: datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")),
+    )
     ts = _parse_triage_timestamp(last_triage["body"])
-    if ts is None:
+    if ts is None or ts.tzinfo is None:
         return True
     issue_updated = issue.updated_at
     if issue_updated.tzinfo is None:
         issue_updated = issue_updated.replace(tzinfo=timezone.utc)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
     return issue_updated > ts
 
 
