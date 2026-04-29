@@ -3,6 +3,7 @@ import re
 import asyncio
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote as _url_quote
 
 import httpx
 
@@ -120,3 +121,42 @@ class GitHubClient(TrackerClient):
             for item in items
             if "pull_request" not in item
         ]
+
+    async def fetch_issue_comments(self, number: int) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{self._base}/issues/{number}/comments",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            r.raise_for_status()
+            return r.json()
+
+    async def post_comment(self, number: int, body: str) -> None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/issues/{number}/comments",
+                headers=self._headers,
+                json={"body": body},
+            )
+            r.raise_for_status()
+
+    async def add_labels(self, number: int, labels: list[str]) -> None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/issues/{number}/labels",
+                headers=self._headers,
+                json={"labels": labels},
+            )
+            r.raise_for_status()
+
+    async def remove_label(self, number: int, label: str) -> None:
+        encoded = _url_quote(label, safe="")
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.delete(
+                f"{self._base}/issues/{number}/labels/{encoded}",
+                headers=self._headers,
+            )
+            if r.status_code == 404:
+                return
+            r.raise_for_status()
