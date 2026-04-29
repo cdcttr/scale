@@ -28,6 +28,20 @@ class Orchestrator:
         self._refresh_event = asyncio.Event()
         self._ssh_index = 0
 
+    def _has_slot(self, issue: Issue) -> bool:
+        """Check concurrency limits only — not claimed/running status."""
+        if len(self._state.running) >= self._config.agent.max_concurrent_agents:
+            return False
+        for state_name, limit in self._config.agent.max_concurrent_agents_by_state.items():
+            if issue.state == state_name:
+                count = sum(
+                    1 for s in self._state.running.values()
+                    if s.issue.state == state_name
+                )
+                if count >= limit:
+                    return False
+        return True
+
     def _make_worker(self) -> LocalWorker | SSHWorker:
         hosts = self._config.worker.ssh_hosts
         if hosts:
@@ -158,7 +172,7 @@ class Orchestrator:
                     async with self._lock:
                         self._state.claimed.discard(entry.issue.id)
                     continue
-                if not is_eligible(entry.issue, self._state, self._config):
+                if not self._has_slot(entry.issue):
                     self._schedule_retry(entry.issue, entry.attempt, "no slots")
                     continue
                 async with self._lock:
