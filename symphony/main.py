@@ -91,6 +91,7 @@ async def _plan(
     from symphony.planner.runner import PlannerRunner
 
     config = load_workflow(workflow_path)
+    assert config.planner is not None, "planner not configured"
     tracker = GitHubClient(config.tracker)
     runner = PlannerRunner(config.planner, config.codex, tracker, dry_run=dry_run)
     issues = await tracker.fetch_issues_by_numbers(issue_numbers)
