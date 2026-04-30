@@ -75,6 +75,28 @@ async def test_assess_at_max_depth_returns_leaf(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_assess_below_max_depth_invokes_runner(tmp_path: Path):
+    """Verify runner IS called at depth == max_depth - 1."""
+    payload = json.dumps({"type": "leaf", "children": None})
+    agent = PlannerAgent(_config(max_depth=3), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn(payload))) as mock_run:
+        result = await agent.assess(_issue(), [], 2, tmp_path)  # depth 2 < max_depth 3
+    mock_run.assert_called_once()
+    assert result is not None
+    assert result.is_leaf is True
+
+
+@pytest.mark.asyncio
+async def test_assess_concept_with_empty_children_returns_none(tmp_path: Path):
+    """concept response with no children is a malformed response → None."""
+    payload = json.dumps({"type": "concept", "children": None})
+    agent = PlannerAgent(_config(), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn(payload))):
+        result = await agent.assess(_issue(), [], 0, tmp_path)
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_assess_handles_runner_exception(tmp_path: Path):
     agent = PlannerAgent(_config(), _codex())
     with patch.object(agent._runner, "run_turn", AsyncMock(side_effect=Exception("fail"))):
