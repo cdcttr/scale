@@ -33,13 +33,14 @@ def _build_marker(children: list[int], depth: int) -> str:
 
 
 def _get_depth(issue: Issue) -> int:
+    depths = []
     for label in issue.labels:
         if label.startswith("symphony:depth:"):
             try:
-                return int(label.split(":")[-1])
+                depths.append(int(label.split(":")[-1]))
             except ValueError:
                 pass
-    return 0
+    return max(depths) if depths else 0
 
 
 class PlannerRunner:
@@ -61,7 +62,8 @@ class PlannerRunner:
         if self._sub_issues_available is False:
             return
         result = await self._client.add_sub_issue(parent_number, child_node_id)
-        self._sub_issues_available = result
+        if not result:
+            self._sub_issues_available = False
 
     async def plan_issue(self, issue: Issue, force: bool = False) -> None:
         if self._config.planned_label in issue.labels and not force:
@@ -106,15 +108,24 @@ class PlannerRunner:
         child_depth = depth + 1
         depth_label = f"symphony:depth:{child_depth}"
 
-        for child_spec in assessment.children:
-            child_labels = list(child_spec.labels) + [depth_label]
-            child_issue = await self._client.create_issue(
-                title=child_spec.title,
-                body=f"_Decomposed from #{issue.number}_\n\n{child_spec.description}",
-                labels=child_labels,
-            )
-            child_numbers.append(child_issue["number"])
-            await self._try_add_sub_issue(issue.number, child_issue["node_id"])
+        try:
+            for child_spec in assessment.children:
+                child_labels = list(child_spec.labels) + [depth_label]
+                child_issue = await self._client.create_issue(
+                    title=child_spec.title,
+                    body=f"_Decomposed from #{issue.number}_\n\n{child_spec.description}",
+                    labels=child_labels,
+                )
+                child_numbers.append(child_issue["number"])
+                await self._try_add_sub_issue(issue.number, child_issue["node_id"])
+        except Exception:
+            if child_numbers:
+                log.warning(
+                    "Partial child creation for issue #%d (%d/%d created), posting partial marker",
+                    issue.number, len(child_numbers), len(assessment.children),
+                )
+                await self._client.post_comment(issue.number, _build_marker(child_numbers, depth))
+            raise
 
         marker = _build_marker(child_numbers, depth)
         await self._client.post_comment(issue.number, marker)

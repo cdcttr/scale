@@ -161,3 +161,85 @@ async def test_get_child_numbers_from_marker(tmp_path):
     runner._workspace = tmp_path
     numbers = await runner.get_child_numbers(issue)
     assert numbers == [51, 52, 53]
+
+
+@pytest.mark.asyncio
+async def test_sub_issues_latch_false_after_first_failure(tmp_path):
+    """Once add_sub_issue returns False, subsequent calls are skipped."""
+    issue = _issue()
+    gh = AsyncMock()
+    gh.fetch_issue_comments.return_value = []
+    gh.create_issue.side_effect = [
+        {"number": 51, "node_id": "node51"},
+        {"number": 52, "node_id": "node52"},
+    ]
+    gh.add_sub_issue.return_value = False  # API unavailable
+
+    runner = PlannerRunner(_config(), _codex(), gh)
+    runner._workspace = tmp_path
+    assessment = PlanAssessment(is_leaf=False, children=[
+        ChildSpec(title="Child A", description="Do A", labels=[]),
+        ChildSpec(title="Child B", description="Do B", labels=[]),
+    ])
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
+        await runner.plan_issue(issue)
+
+    # add_sub_issue should only be called once (latched to False after first failure)
+    assert gh.add_sub_issue.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_issue_concept_partial_failure_posts_partial_marker(tmp_path):
+    """If child creation fails mid-loop, a partial marker is posted for recovery."""
+    issue = _issue()
+    gh = AsyncMock()
+    gh.fetch_issue_comments.return_value = []
+    gh.create_issue.side_effect = [
+        {"number": 51, "node_id": "node51"},
+        Exception("GitHub API error"),
+    ]
+
+    runner = PlannerRunner(_config(), _codex(), gh)
+    runner._workspace = tmp_path
+    assessment = PlanAssessment(is_leaf=False, children=[
+        ChildSpec(title="Child A", description="Do A", labels=[]),
+        ChildSpec(title="Child B", description="Do B", labels=[]),
+    ])
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
+        with pytest.raises(Exception, match="GitHub API error"):
+            await runner.plan_issue(issue)
+
+    # Partial marker should be posted with the one successfully created child
+    gh.post_comment.assert_called_once()
+    marker_body = gh.post_comment.call_args[0][1]
+    assert "51" in marker_body
+    # Parent should NOT be labeled as planned
+    for call in gh.add_labels.call_args_list:
+        assert "symphony:planned" not in call[0][1]
+
+
+def test_get_depth_uses_max_when_multiple_labels():
+    issue = _issue(labels=["symphony:depth:1", "symphony:depth:3", "symphony:ready"])
+    assert _get_depth(issue) == 3
+
+
+@pytest.mark.asyncio
+async def test_plan_issue_concept_depth_label_propagated(tmp_path):
+    """Children get symphony:depth:N+1 where N is the parent's depth."""
+    issue = _issue(labels=["symphony:depth:1"])
+    gh = AsyncMock()
+    gh.fetch_issue_comments.return_value = []
+    gh.create_issue.return_value = {"number": 51, "node_id": "node51"}
+    gh.add_sub_issue.return_value = True
+
+    runner = PlannerRunner(_config(), _codex(), gh)
+    runner._workspace = tmp_path
+    assessment = PlanAssessment(is_leaf=False, children=[
+        ChildSpec(title="Child A", description="Do A", labels=["symphony:ready"]),
+    ])
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
+        await runner.plan_issue(issue)
+
+    create_call = gh.create_issue.call_args
+    labels_used = create_call[1]["labels"] if "labels" in create_call[1] else create_call[0][2]
+    assert "symphony:depth:2" in labels_used
