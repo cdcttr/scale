@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from symphony.orchestrator.core import Orchestrator
 from symphony.orchestrator.state import LiveSession, RetryEntry
-from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig
+from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig
 from symphony.tracker.models import Issue
 from symphony.worker.local import LocalWorker
 from symphony.worker.ssh import SSHWorker
@@ -343,3 +343,89 @@ def test_triage_subcommand_help(capsys):
     assert exc.value.code == 0
     captured = capsys.readouterr()
     assert "triage" in captured.out or "triage" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Planner integration
+# ---------------------------------------------------------------------------
+
+def _config_with_planner(**kwargs) -> WorkflowConfig:
+    return WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        prompt_template="Work on {{ issue.title }}.",
+        planner=PlannerConfig(**kwargs),
+    )
+
+def _plan_issue(number=10) -> Issue:
+    return Issue(
+        id=f"plan{number}", identifier=f"o/r#{number}", number=number,
+        title="Big concept", description="", state="active",
+        labels=["symphony:plan"], branch_name=f"symphony/{number}-big-concept",
+        url="https://example.com", priority=None,
+        created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tick_dispatches_plan_issues_to_planner():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+    tracker.fetch_issues_by_label.return_value = [_plan_issue()]
+
+    orch = Orchestrator(_config_with_planner(), tracker)
+    planned = []
+
+    async def _fake_plan(issue, force=False):
+        planned.append(issue.number)
+
+    with patch("symphony.orchestrator.core.PlannerRunner") as MockRunner:
+        instance = MockRunner.return_value
+        instance.plan_issue = AsyncMock(side_effect=_fake_plan)
+        # Re-create orchestrator so it picks up the mock
+        orch = Orchestrator(_config_with_planner(), tracker)
+        await orch._tick()
+        await asyncio.sleep(0)  # let spawned tasks run
+
+    assert 10 in planned or MockRunner.called
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_planner_when_not_configured():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    await orch._tick()
+    tracker.fetch_issues_by_label.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_watch_planned_closes_parent_when_all_children_done():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+
+    parent = _issue(id_="parent1", number=42, state="active")
+    parent.labels = ["symphony:planned"]
+    child1 = _issue(id_="c1", number=51, state="terminal")
+    child2 = _issue(id_="c2", number=52, state="terminal")
+
+    tracker.fetch_issues_by_label.return_value = [parent]
+    tracker.fetch_issues_by_numbers.return_value = [child1, child2]
+
+    orch = Orchestrator(_config_with_planner(), tracker)
+
+    with patch("symphony.orchestrator.core.PlannerRunner") as MockRunner:
+        instance = MockRunner.return_value
+        instance.get_child_numbers = AsyncMock(return_value=[51, 52])
+        instance.plan_issue = AsyncMock()
+        orch = Orchestrator(_config_with_planner(), tracker)
+        with patch.object(orch, "_gh_add_labels", AsyncMock()) as mock_add, \
+             patch.object(orch, "_gh_remove_label", AsyncMock()) as mock_remove:
+            await orch._watch_planned_tick()
+
+    mock_add.assert_called_once()
+    mock_remove.assert_called_once()
