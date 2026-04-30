@@ -80,6 +80,27 @@ async def _triage(
     await runner.run(issues, force=force_all)
 
 
+async def _plan(
+    workflow_path: Path,
+    issue_numbers: list[int],
+    dry_run: bool,
+    force: bool,
+) -> None:
+    from symphony.config.loader import load_workflow
+    from symphony.tracker.github import GitHubClient
+    from symphony.planner.runner import PlannerRunner
+
+    config = load_workflow(workflow_path)
+    if not config.planner:
+        print("Error: planner is not configured in WORKFLOW.md. Add a [planner] section.", file=sys.stderr)
+        sys.exit(1)
+
+    tracker = GitHubClient(config.tracker)
+    runner = PlannerRunner(config.planner, config.codex, tracker, dry_run=dry_run)
+    issues = await tracker.fetch_issues_by_numbers(issue_numbers)
+    await runner.run(issues, force=force)
+
+
 def main() -> None:
     from importlib.metadata import version as _pkg_version
     parser = argparse.ArgumentParser(description="Symphony — Claude Code orchestrator")
@@ -137,6 +158,36 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
 
+    plan_p = sub.add_parser("plan", help="Decompose a high-level issue into child tasks")
+    plan_p.add_argument(
+        "workflow",
+        nargs="?",
+        default="WORKFLOW.md",
+        help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    plan_p.add_argument(
+        "--issue", "-i",
+        dest="issues",
+        required=True,
+        metavar="N[,N,...]",
+        help="Comma-separated issue numbers to plan",
+    )
+    plan_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print decomposition to stdout, do not create issues or apply labels",
+    )
+    plan_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-decompose even if already symphony:planned",
+    )
+    plan_p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -155,6 +206,12 @@ def main() -> None:
             else None
         )
         asyncio.run(_triage(Path(args.workflow), issue_numbers, args.force_all, args.model, args.dry_run))
+        return
+
+    if args.command == "plan":
+        _setup_logging(args.log_level)
+        issue_numbers = [int(n.strip()) for n in args.issues.split(",")]
+        asyncio.run(_plan(Path(args.workflow), issue_numbers, args.dry_run, args.force))
         return
 
     _setup_logging(args.log_level)
