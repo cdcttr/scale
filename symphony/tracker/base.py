@@ -12,3 +12,6 @@ class TrackerClient(ABC):
 
     @abstractmethod
     async def fetch_terminal_issues(self) -> list[Issue]: ...
+
+    @abstractmethod
+    async def fetch_issues_by_label(self, label: str) -> list[Issue]: ...

@@ -123,3 +123,37 @@ def test_workflow_config_triage_set():
     assert wf.triage.model == "claude-sonnet-4-6"
     assert wf.triage.ready_label == "symphony:ready"
     assert wf.triage.triaged_label == "symphony:triaged"
+
+
+from symphony.config.schema import PlannerConfig
+
+def test_planner_config_defaults():
+    cfg = PlannerConfig()
+    assert cfg.model == "claude-sonnet-4-6"
+    assert cfg.max_depth == 3
+    assert cfg.plan_label == "symphony:plan"
+    assert cfg.leaf_label == "symphony:leaf"
+    assert cfg.concept_label == "symphony:concept"
+    assert cfg.planned_label == "symphony:planned"
+    assert cfg.planner_workspace == "./workspaces/_planner"
+
+
+def test_workflow_config_planner_defaults_none():
+    from symphony.config.schema import WorkflowConfig, TrackerConfig
+    cfg = WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        prompt_template="t",
+    )
+    assert cfg.planner is None
+
+
+def test_workflow_config_with_planner():
+    from symphony.config.schema import WorkflowConfig, TrackerConfig
+    cfg = WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        prompt_template="t",
+        planner=PlannerConfig(model="claude-opus-4-7", max_depth=2),
+    )
+    assert cfg.planner is not None
+    assert cfg.planner.model == "claude-opus-4-7"
+    assert cfg.planner.max_depth == 2

@@ -55,7 +55,7 @@ class ClaudeRunner:
     def __init__(self, config: CodexConfig) -> None:
         self._config = config
 
-    def _build_cmd(self, prompt: str, is_continuation: bool) -> list[str]:
+    def _build_cmd(self, prompt: str, is_continuation: bool, model: Optional[str] = None) -> list[str]:
         cmd = [
             self._config.command,
             "--print",
@@ -65,6 +65,8 @@ class ClaudeRunner:
         ]
         if is_continuation:
             cmd.append("--continue")
+        if model is not None:
+            cmd += ["--model", model]
         cmd += ["-p", prompt]
         return cmd
 
@@ -74,8 +76,9 @@ class ClaudeRunner:
         prompt: str,
         is_continuation: bool,
         on_event: Optional[Callable[[dict], None]] = None,
+        model: Optional[str] = None,
     ) -> TurnResult:
-        cmd = self._build_cmd(prompt, is_continuation)
+        cmd = self._build_cmd(prompt, is_continuation, model)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(workspace),

@@ -1,11 +1,12 @@
 from __future__ import annotations
 import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from anthropic import Anthropic
-
-from symphony.config.schema import TriageConfig
+from symphony.agent.claude import ClaudeRunner
+from symphony.config.schema import CodexConfig, TriageConfig
 from symphony.tracker.models import Issue
 
 log = logging.getLogger(__name__)
@@ -67,9 +68,9 @@ class TriageAssessment:
 
 
 class TriageAgent:
-    def __init__(self, config: TriageConfig) -> None:
+    def __init__(self, config: TriageConfig, codex: CodexConfig) -> None:
         self._config = config
-        self._client = Anthropic()
+        self._runner = ClaudeRunner(codex)
 
     def _build_prompt(self, issue: Issue, comments: list[dict]) -> str:
         parts = [
@@ -87,23 +88,34 @@ class TriageAgent:
                 author = c.get("user", {}).get("login", "unknown")
                 parts.append(f"**{author}:** {c['body']}")
                 parts.append("")
+        parts += [
+            "## Instructions",
+            _SYSTEM_PROMPT,
+        ]
         return "\n".join(parts)
 
-    def assess(self, issue: Issue, comments: list[dict]) -> TriageAssessment | None:
+    async def assess(
+        self,
+        issue: Issue,
+        comments: list[dict],
+        workspace: Path,
+    ) -> TriageAssessment | None:
         prompt = self._build_prompt(issue, comments)
         try:
-            response = self._client.messages.create(
+            result = await self._runner.run_turn(
+                workspace=workspace,
+                prompt=prompt,
+                is_continuation=False,
                 model=self._config.model,
-                max_tokens=1024,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
             )
-            raw = response.content[0].text
         except Exception as exc:
             log.error("Triage API call failed for issue #%d: %s", issue.number, exc)
             return None
+        if not result.success:
+            log.error("Triage call failed for issue #%d: %s", issue.number, result.message)
+            return None
         try:
-            data = json.loads(raw)
+            data = json.loads(result.message)
             return TriageAssessment(
                 ready=bool(data["ready"]),
                 summary=data["summary"],
@@ -111,5 +123,8 @@ class TriageAgent:
                 comment=data.get("comment", ""),
             )
         except Exception as exc:
-            log.error("Triage JSON parse failed for issue #%d: %s\nRaw response: %s", issue.number, exc, raw)
+            log.error(
+                "Triage JSON parse failed for issue #%d: %s\nRaw response: %s",
+                issue.number, exc, result.message,
+            )
             return None
