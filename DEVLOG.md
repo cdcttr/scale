@@ -8,6 +8,8 @@ Symphony is a self-hosted Python daemon that autonomously dispatches Claude Code
 **Started:** 2026-04-28  
 **Last Updated:** 2026-04-29
 
+Symphony also includes a `symphony plan` command that decomposes high-level issues into leaf-level child tasks before dispatch.
+
 ---
 
 ## 2026-04-28 — Project Inception
@@ -85,5 +87,61 @@ This establishes the trust boundary explicitly rather than leaving it implicit. 
 The credential concern also came up: it looked like tokens needed to be embedded in WORKFLOW.md. The config loader already supports `$VAR` syntax that resolves against the environment at load time (raises a clear error if unset), so WORKFLOW.md commits cleanly with `api_token: $GITHUB_TOKEN`.
 
 Two fixes were committed: the path traversal guard and the prompt safety preamble. The SSH injection is documented but not yet fixed — it requires reworking the command construction to avoid shell interpolation entirely.
+
+---
+
+## 2026-04-29 — Symphony Planner
+
+The core dispatch loop assumes issues are already leaf-level tasks — clear scope, defined done state, ready for an agent to implement. In practice, real backlogs contain high-level concepts: "Add OAuth support", "Build admin dashboard", "Migrate to PostgreSQL". Pointing Symphony at these without decomposition produces vague PRs or outright failures. The Planner adds a decomposition layer that sits between issue creation and dispatch.
+
+### The architectural constraint that shaped everything
+
+During the design conversation, a key question emerged: Symphony already invokes Claude Code via the `claude` CLI subprocess. Should the new Planner call the Anthropic SDK directly (simpler in isolation) or route through the same `ClaudeRunner` subprocess wrapper? The answer turned out to be non-negotiable: the whole value of using Claude Code rather than raw API calls is that the agent has tool access — it can browse the codebase, read files, and make informed decomposition decisions. Calling the SDK directly bypasses all of that.
+
+This had an immediate implication: `TriageAgent` had been calling `Anthropic().messages.create()` directly since it was built. That needed to be fixed first. So the planner work began by refactoring triage to use `ClaudeRunner`, removing the `anthropic` SDK dependency entirely, and giving `ClaudeRunner` an optional `--model` flag so different agents can use different models (triage uses Haiku; planning uses Sonnet).
+
+### Triggering model
+
+A meaningful design choice was whether Symphony should autonomously scan all unlabeled issues and try to classify them, or only touch issues it's explicitly pointed at. The autonomous approach felt wrong — it would mean Symphony was making opinionated decisions about your entire backlog without being asked. The explicit model won: Symphony only plans issues that carry a `symphony:plan` label (added manually or by another process) or that are targeted directly via `symphony plan --issue N`. There is no `--all` flag and no background scanning.
+
+One early intuition was to use issue number ordering as a proxy for priority. This turned out to be wrong — issue numbers reflect creation order, not importance. Explicit `priority:N` labels are the ordering mechanism; creation date breaks ties.
+
+### Label state machine
+
+The planner introduces five labels governing the lifecycle:
+
+- `symphony:plan` — signal to decompose
+- `symphony:leaf` — classified as directly implementable
+- `symphony:concept` — classified as needing decomposition
+- `symphony:planned` — children created, parent waiting
+- `symphony:done` — terminal (existing label)
+
+When a `symphony:plan` issue is processed, the agent either classifies it as a leaf (which removes `symphony:plan`, adds `symphony:leaf`, and lets the dispatch loop pick it up normally) or as a concept (which creates child issues, posts a marker comment, adds `symphony:planned`, and removes `symphony:plan`). The dispatch loop skips `symphony:planned` issues. A separate `_watch_planned()` asyncio task polls for parents whose children are all terminal and closes them automatically.
+
+Depth is tracked via `symphony:depth:N` labels — children created from a root issue get `symphony:depth:1`, their children get `symphony:depth:2`, and so on. `PlannerRunner` enforces a configurable max depth (default 3), forcing leaf classification rather than calling the agent when the limit is hit.
+
+### Child tracking: sub-issues API with marker fallback
+
+GitHub has a native sub-issues API (`POST /repos/.../issues/{n}/sub_issues`) that renders as a native task list in the UI. Symphony uses it as the primary linking mechanism. But the API is relatively new and not available in all GitHub plans or regions. Rather than failing hard, Symphony falls back to posting a hidden HTML comment on the parent: `<!-- symphony-plan {"children": [51, 52, 53], "depth": 0} -->`. This marker is always written even when the sub-issues API succeeds, giving a stable machine-readable record that doesn't depend on the API being available in future ticks.
+
+### Bugs caught in review
+
+The two-stage review process (spec compliance, then code quality) caught a handful of meaningful bugs before they merged:
+
+**`_watch_planned` using the shared refresh event** — the original draft waited on `self._refresh_event`. This would have interfered with `_tick_loop` clearing the same event, causing the watcher to either miss wakeups or steal them from the main loop. Fixed to use `asyncio.sleep` directly.
+
+**`concept` response with no children treated as success** — if the planning agent returned `{"type": "concept", "children": null}`, the original parser would create a `PlanAssessment(is_leaf=False, children=[])`, an invalid state that would cause `PlannerRunner` to label the parent as `symphony:planned` with no children to wait on. Fixed to treat this as a parse failure and return `None`, triggering a retry on the next tick.
+
+**`_sub_issues_available` latch toggling** — the flag that tracks whether GitHub's sub-issues API is available was being unconditionally overwritten with each call result. If the first call returned `True` and a subsequent call returned `False` (e.g., a transient network issue), the flag would latch to `False` and disable sub-issue linking for all future issues in that run. Fixed to only latch to `False`, never re-enable.
+
+**Partial child creation leaving orphans** — if `create_issue` raised mid-loop (rate limit, network blip), the function would exit with N orphan child issues on GitHub, no marker comment, and no label changes. On retry, the planner would create a fresh batch of duplicates. Fixed by wrapping the creation loop in `try/except` and posting a partial marker on failure, making the orphaned state at least discoverable on the next run.
+
+**`return` instead of `continue` in `_watch_planned_tick`** — the guard against empty `terminal_labels` config used `return`, which exited the entire method rather than just skipping the current issue. A misconfigured `terminal_labels: []` would silently prevent all parent issues from ever being closed.
+
+### Where it landed
+
+The planner is fully integrated: the dispatch loop detects `symphony:plan` labels and dispatches to `PlannerRunner` before the normal candidate fetch; `_watch_planned` runs as a second asyncio task alongside `_tick_loop`; `symphony plan --issue N[,N,...] [--dry-run] [--force]` works from the CLI. Planning is opt-in — if `planner:` is absent from the config, the dispatch loop ignores `symphony:plan` labels entirely and the CLI exits with a clear error.
+
+181 tests passing. Design spec: `docs/superpowers/specs/2026-04-29-symphony-planner-design.md`.
 
 ---
