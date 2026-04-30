@@ -296,7 +296,7 @@ class Orchestrator:
                 )
                 if not self._config.tracker.terminal_labels:
                     logger.warning("Cannot close planned parent issues: terminal_labels is empty in tracker config")
-                    return
+                    continue
                 terminal_label = self._config.tracker.terminal_labels[0]
                 await self._gh_add_labels(issue.number, [terminal_label])
                 await self._gh_remove_label(issue.number, self._config.planner.planned_label)
