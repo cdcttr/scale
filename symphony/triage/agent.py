@@ -4,7 +4,6 @@ import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from symphony.agent.claude import ClaudeRunner
 from symphony.config.schema import CodexConfig, TriageConfig

@@ -116,15 +116,21 @@ class PlannerAgent:
 
         try:
             data = json.loads(result.message)
-            if data["type"] == "leaf":
+            ptype = data.get("type")
+            if ptype == "leaf":
                 return PlanAssessment(is_leaf=True)
+            if ptype != "concept":
+                raise ValueError(f"Unknown plan type: {ptype!r}")
+            raw_children = data.get("children") or []
+            if not raw_children:
+                raise ValueError("concept response had no children")
             children = [
                 ChildSpec(
                     title=c["title"],
                     description=c["description"],
                     labels=c.get("labels", []),
                 )
-                for c in (data.get("children") or [])
+                for c in raw_children
             ]
             return PlanAssessment(is_leaf=False, children=children)
         except Exception as exc:
