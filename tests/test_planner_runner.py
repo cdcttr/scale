@@ -40,6 +40,10 @@ def test_parse_plan_marker_not_a_marker():
     assert _parse_plan_marker("not a marker") is None
 
 
+def test_parse_plan_marker_invalid_json():
+    assert _parse_plan_marker("<!-- symphony-plan {not valid json} -->") is None
+
+
 def test_build_marker_roundtrip():
     marker = _build_marker([51, 52, 53], 1)
     data = _parse_plan_marker(marker)
