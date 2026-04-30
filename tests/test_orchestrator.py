@@ -374,21 +374,14 @@ async def test_tick_dispatches_plan_issues_to_planner():
     tracker.fetch_issues_by_numbers.return_value = []
     tracker.fetch_issues_by_label.return_value = [_plan_issue()]
 
-    orch = Orchestrator(_config_with_planner(), tracker)
-    planned = []
-
-    async def _fake_plan(issue, force=False):
-        planned.append(issue.number)
-
-    with patch("symphony.orchestrator.core.PlannerRunner") as MockRunner:
-        instance = MockRunner.return_value
-        instance.plan_issue = AsyncMock(side_effect=_fake_plan)
-        # Re-create orchestrator so it picks up the mock
+    with patch("symphony.orchestrator.core.PlannerRunner"):
         orch = Orchestrator(_config_with_planner(), tracker)
-        await orch._tick()
-        await asyncio.sleep(0)  # let spawned tasks run
+        with patch.object(orch, "_run_planner", AsyncMock()) as mock_run_planner:
+            await orch._tick()
+            await asyncio.sleep(0)  # let spawned tasks run
 
-    assert 10 in planned or MockRunner.called
+    mock_run_planner.assert_called_once()
+    assert mock_run_planner.call_args[0][0].number == 10
 
 
 @pytest.mark.asyncio
@@ -416,8 +409,6 @@ async def test_watch_planned_closes_parent_when_all_children_done():
     tracker.fetch_issues_by_label.return_value = [parent]
     tracker.fetch_issues_by_numbers.return_value = [child1, child2]
 
-    orch = Orchestrator(_config_with_planner(), tracker)
-
     with patch("symphony.orchestrator.core.PlannerRunner") as MockRunner:
         instance = MockRunner.return_value
         instance.get_child_numbers = AsyncMock(return_value=[51, 52])
@@ -427,5 +418,5 @@ async def test_watch_planned_closes_parent_when_all_children_done():
              patch.object(orch, "_gh_remove_label", AsyncMock()) as mock_remove:
             await orch._watch_planned_tick()
 
-    mock_add.assert_called_once()
-    mock_remove.assert_called_once()
+    mock_add.assert_called_once_with(42, ["symphony:done"])
+    mock_remove.assert_called_once_with(42, "symphony:planned")
