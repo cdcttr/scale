@@ -59,6 +59,16 @@ class TriageConfig(BaseModel):
     triaged_label: str = "symphony:triaged"
 
 
+class PlannerConfig(BaseModel):
+    model: str = "claude-sonnet-4-6"
+    max_depth: int = 3
+    plan_label: str = "symphony:plan"
+    leaf_label: str = "symphony:leaf"
+    concept_label: str = "symphony:concept"
+    planned_label: str = "symphony:planned"
+    planner_workspace: str = "./workspaces/_planner"
+
+
 class WorkflowConfig(BaseModel):
     tracker: TrackerConfig
     polling: PollingConfig = Field(default_factory=PollingConfig)
@@ -69,4 +79,5 @@ class WorkflowConfig(BaseModel):
     server: Optional[ServerConfig] = None
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     triage: Optional[TriageConfig] = None
+    planner: Optional[PlannerConfig] = None
     prompt_template: str = ""

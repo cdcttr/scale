@@ -168,3 +168,46 @@ class GitHubClient(TrackerClient):
             if r.status_code == 404:
                 return
             r.raise_for_status()
+
+    async def create_issue(self, title: str, body: str, labels: list[str]) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/issues",
+                headers=self._headers,
+                json={"title": title, "body": body, "labels": labels},
+            )
+            r.raise_for_status()
+            return r.json()
+
+    async def add_sub_issue(self, parent_number: int, child_node_id: str) -> bool:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/issues/{parent_number}/sub_issues",
+                headers=self._headers,
+                json={"sub_issue_id": child_node_id},
+            )
+            if r.status_code in (403, 404):
+                return False
+            r.raise_for_status()
+            return True
+
+    async def fetch_sub_issues(self, parent_number: int) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{self._base}/issues/{parent_number}/sub_issues",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            if r.status_code in (403, 404):
+                return []
+            r.raise_for_status()
+            return r.json()
+
+    async def fetch_issues_by_label(self, label: str) -> list[Issue]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            items = await self._paginate(client, {"state": "open", "labels": label})
+        return [
+            self._normalize(item)
+            for item in items
+            if "pull_request" not in item
+        ]

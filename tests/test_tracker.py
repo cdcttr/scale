@@ -202,3 +202,94 @@ async def test_remove_label_404_is_silent():
     result = await client.remove_label(42, "symphony:ready")
     assert route.called
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_create_issue():
+    import json
+    with respx.mock:
+        route = respx.post("https://api.github.com/repos/owner/repo/issues").mock(
+            return_value=httpx.Response(201, json={
+                "number": 99, "node_id": "node99", "title": "New child",
+                "html_url": "https://github.com/owner/repo/issues/99",
+                "state": "open", "labels": [], "body": "desc",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            })
+        )
+        gh = GitHubClient(_config())
+        result = await gh.create_issue("New child", "desc", ["symphony:ready"])
+        # Verify the request body was correct
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["title"] == "New child"
+        assert sent["body"] == "desc"
+        assert "symphony:ready" in sent["labels"]
+    assert result["number"] == 99
+    assert result["node_id"] == "node99"
+
+
+@pytest.mark.asyncio
+async def test_add_sub_issue_success():
+    import json
+    with respx.mock:
+        route = respx.post(
+            "https://api.github.com/repos/owner/repo/issues/42/sub_issues"
+        ).mock(return_value=httpx.Response(200, json={}))
+        gh = GitHubClient(_config())
+        result = await gh.add_sub_issue(42, "node99")
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["sub_issue_id"] == "node99"
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_add_sub_issue_unavailable():
+    with respx.mock:
+        respx.post(
+            "https://api.github.com/repos/owner/repo/issues/42/sub_issues"
+        ).mock(return_value=httpx.Response(404, json={}))
+        gh = GitHubClient(_config())
+        result = await gh.add_sub_issue(42, "node99")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_sub_issues_success():
+    with respx.mock:
+        respx.get(
+            "https://api.github.com/repos/owner/repo/issues/42/sub_issues"
+        ).mock(return_value=httpx.Response(200, json=[
+            {"number": 51, "state": "open"},
+            {"number": 52, "state": "closed"},
+        ]))
+        gh = GitHubClient(_config())
+        result = await gh.fetch_sub_issues(42)
+    assert len(result) == 2
+    assert result[0]["number"] == 51
+
+
+@pytest.mark.asyncio
+async def test_fetch_sub_issues_unavailable():
+    with respx.mock:
+        respx.get(
+            "https://api.github.com/repos/owner/repo/issues/42/sub_issues"
+        ).mock(return_value=httpx.Response(404, json={}))
+        gh = GitHubClient(_config())
+        result = await gh.fetch_sub_issues(42)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_issues_by_label():
+    issue_data = _gh_issue(number=10, labels=["symphony:planned"])
+    with respx.mock:
+        route = respx.get("https://api.github.com/repos/owner/repo/issues")
+        route.side_effect = [
+            httpx.Response(200, json=[issue_data]),
+            httpx.Response(200, json=[]),
+        ]
+        gh = GitHubClient(_config())
+        results = await gh.fetch_issues_by_label("symphony:planned")
+        assert route.calls[0].request.url.params["labels"] == "symphony:planned"
+    assert len(results) == 1
+    assert results[0].number == 10

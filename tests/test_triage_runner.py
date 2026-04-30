@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 from symphony.triage.runner import TriageRunner, _parse_triage_timestamp, _needs_triage
 from symphony.triage.agent import TriageAssessment
 from symphony.tracker.models import Issue
-from symphony.config.schema import TriageConfig
+from symphony.config.schema import CodexConfig, TriageConfig
 
 
 def _config(**kwargs) -> TriageConfig:
@@ -82,7 +82,7 @@ async def test_triage_issue_skips_when_current():
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = [_triage_comment(triage_ts)]
 
-    runner = TriageRunner(_config(), gh)
+    runner = TriageRunner(_config(), CodexConfig(), gh)
     await runner.triage_issue(issue, force=False)
 
     gh.post_comment.assert_not_called()
@@ -95,12 +95,12 @@ async def test_triage_issue_ready_posts_and_labels():
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
 
-    runner = TriageRunner(_config(), gh)
+    runner = TriageRunner(_config(), CodexConfig(), gh)
     assessment = TriageAssessment(
         ready=True, summary="Clear.",
         comment="## Symphony Triage\n\n**Status: Ready ✅**",
     )
-    with patch.object(runner._agent, "assess", return_value=assessment):
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.triage_issue(issue)
 
     gh.post_comment.assert_called_once()
@@ -120,13 +120,13 @@ async def test_triage_issue_not_ready_posts_and_labels():
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
 
-    runner = TriageRunner(_config(), gh)
+    runner = TriageRunner(_config(), CodexConfig(), gh)
     assessment = TriageAssessment(
         ready=False, summary="Missing criteria.",
         reasons=["No acceptance criteria"],
         comment="## Symphony Triage\n\n**Status: Needs more detail ❌**",
     )
-    with patch.object(runner._agent, "assess", return_value=assessment):
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.triage_issue(issue)
 
     labels_added = gh.add_labels.call_args[0][1]
@@ -141,12 +141,12 @@ async def test_triage_issue_dry_run_no_github_calls(capsys):
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
 
-    runner = TriageRunner(_config(), gh, dry_run=True)
+    runner = TriageRunner(_config(), CodexConfig(), gh, dry_run=True)
     assessment = TriageAssessment(
         ready=True, summary="Clear.",
         comment="## Symphony Triage\n\n**Status: Ready ✅**",
     )
-    with patch.object(runner._agent, "assess", return_value=assessment):
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.triage_issue(issue)
 
     gh.post_comment.assert_not_called()
@@ -161,8 +161,8 @@ async def test_triage_issue_skips_on_assessment_failure():
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
 
-    runner = TriageRunner(_config(), gh)
-    with patch.object(runner._agent, "assess", return_value=None):
+    runner = TriageRunner(_config(), CodexConfig(), gh)
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=None)):
         await runner.triage_issue(issue)
 
     gh.post_comment.assert_not_called()
@@ -174,9 +174,9 @@ async def test_run_processes_multiple_issues():
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
 
-    runner = TriageRunner(_config(), gh)
+    runner = TriageRunner(_config(), CodexConfig(), gh)
     assessment = TriageAssessment(ready=True, summary="Clear.", comment="## Symphony Triage")
-    with patch.object(runner._agent, "assess", return_value=assessment):
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.run(issues)
 
     assert gh.post_comment.call_count == 3
