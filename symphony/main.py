@@ -91,10 +91,6 @@ async def _plan(
     from symphony.planner.runner import PlannerRunner
 
     config = load_workflow(workflow_path)
-    if not config.planner:
-        print("Error: planner is not configured in WORKFLOW.md. Add a [planner] section.", file=sys.stderr)
-        sys.exit(1)
-
     tracker = GitHubClient(config.tracker)
     runner = PlannerRunner(config.planner, config.codex, tracker, dry_run=dry_run)
     issues = await tracker.fetch_issues_by_numbers(issue_numbers)
@@ -210,6 +206,11 @@ def main() -> None:
 
     if args.command == "plan":
         _setup_logging(args.log_level)
+        from symphony.config.loader import load_workflow
+        config = load_workflow(Path(args.workflow))
+        if not config.planner:
+            print("Error: planner is not configured in WORKFLOW.md. Add a [planner] section.", file=sys.stderr)
+            sys.exit(1)
         issue_numbers = [int(n.strip()) for n in args.issues.split(",")]
         asyncio.run(_plan(Path(args.workflow), issue_numbers, args.dry_run, args.force))
         return
