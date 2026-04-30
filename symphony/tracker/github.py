@@ -196,6 +196,7 @@ class GitHubClient(TrackerClient):
             r = await client.get(
                 f"{self._base}/issues/{parent_number}/sub_issues",
                 headers=self._headers,
+                params={"per_page": 100},
             )
             if r.status_code in (403, 404):
                 return []
