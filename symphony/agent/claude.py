@@ -63,7 +63,6 @@ class ClaudeRunner:
             "--output-format", "stream-json",
             "--verbose",
             "--dangerously-skip-permissions",
-            "--max-turns", "1",
         ]
         if is_continuation:
             cmd.append("--continue")
