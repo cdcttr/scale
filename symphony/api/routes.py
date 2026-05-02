@@ -1,9 +1,19 @@
 from __future__ import annotations
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from symphony.orchestrator.state import LiveSession, OrchestratorState, RetryEntry
+
+_bearer = HTTPBearer()
+
+
+def _make_verify_token(api_token: str):
+    def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> None:
+        if credentials.credentials != api_token:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    return verify_token
 
 
 def _serialize_session(session: LiveSession) -> dict[str, Any]:
@@ -29,8 +39,8 @@ def _serialize_retry(entry: RetryEntry) -> dict[str, Any]:
     }
 
 
-def build_router(orchestrator) -> APIRouter:
-    router = APIRouter()
+def build_router(orchestrator, api_token: str) -> APIRouter:
+    router = APIRouter(dependencies=[Depends(_make_verify_token(api_token))])
 
     @router.get("/state")
     def get_state() -> dict[str, Any]:
