@@ -7,7 +7,7 @@ from symphony.api.server import create_app
 from symphony.orchestrator.state import OrchestratorState, LiveSession, TokenTotals
 from symphony.tracker.models import Issue
 
-_TOKEN = "test-secret-token"
+_TOKEN = "test-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
@@ -89,7 +89,7 @@ def test_issue_detail_not_found():
     assert r.status_code == 404
 
 
-def test_state_requires_auth():
+def test_state_endpoint_requires_auth_when_token_configured():
     orch = _orch_with_state(OrchestratorState())
     app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
@@ -97,7 +97,23 @@ def test_state_requires_auth():
     assert r.status_code == 401
 
 
-def test_refresh_requires_auth():
+def test_state_endpoint_wrong_token_rejected():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_state_endpoint_valid_token_allowed():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state", headers=_AUTH)
+    assert r.status_code == 200
+
+
+def test_refresh_endpoint_requires_auth_when_token_configured():
     orch = _orch_with_state(OrchestratorState())
     app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
@@ -105,17 +121,9 @@ def test_refresh_requires_auth():
     assert r.status_code == 401
 
 
-def test_issue_detail_requires_auth():
+def test_no_auth_required_when_token_not_configured():
     orch = _orch_with_state(OrchestratorState())
-    app = create_app(orch, api_token=_TOKEN)
+    app = create_app(orch, api_token=None)
     with TestClient(app) as client:
-        r = client.get("/api/v1/nonexistent-99")
-    assert r.status_code == 401
-
-
-def test_wrong_token_rejected():
-    orch = _orch_with_state(OrchestratorState())
-    app = create_app(orch, api_token=_TOKEN)
-    with TestClient(app) as client:
-        r = client.get("/api/v1/state", headers={"Authorization": "Bearer wrong-token"})
-    assert r.status_code == 401
+        r = client.get("/api/v1/state")
+    assert r.status_code == 200

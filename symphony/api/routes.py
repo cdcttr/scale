@@ -1,17 +1,20 @@
 from __future__ import annotations
-from typing import Any, Callable
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from symphony.orchestrator.state import LiveSession, OrchestratorState, RetryEntry
 
+_bearer = HTTPBearer(auto_error=False)
 
-def _make_auth_dependency(token: str) -> Callable:
-    def verify(authorization: str | None = Header(default=None)) -> None:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        if authorization[len("Bearer "):] != token:
-            raise HTTPException(status_code=401, detail="Invalid token")
+
+def _make_auth_dep(api_token: Optional[str]):
+    def verify(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> None:
+        if api_token is None:
+            return
+        if credentials is None or credentials.credentials != api_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return verify
 
 
@@ -38,8 +41,8 @@ def _serialize_retry(entry: RetryEntry) -> dict[str, Any]:
     }
 
 
-def build_router(orchestrator, api_token: str) -> APIRouter:
-    router = APIRouter(dependencies=[Depends(_make_auth_dependency(api_token))])
+def build_router(orchestrator, api_token: Optional[str] = None) -> APIRouter:
+    router = APIRouter(dependencies=[Depends(_make_auth_dep(api_token))])
 
     @router.get("/state")
     def get_state() -> dict[str, Any]:

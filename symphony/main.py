@@ -29,7 +29,7 @@ async def _run(workflow_path: Path, port: int | None) -> None:
     if effective_port:
         from symphony.api.server import create_app
         import uvicorn
-        app = create_app(orch, api_token=config.server.api_token)
+        app = create_app(orch, api_token=config.server.api_token if config.server else None)
         server_config = uvicorn.Config(
             app, host="127.0.0.1", port=effective_port, log_level="warning"
         )
