@@ -115,7 +115,10 @@ class TriageAgent:
             log.error("Triage call failed for issue #%d: %s", issue.number, result.message)
             return None
         try:
-            data = json.loads(result.message)
+            text = result.message.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            data = json.loads(text)
             return TriageAssessment(
                 ready=bool(data["ready"]),
                 summary=data["summary"],

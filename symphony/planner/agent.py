@@ -115,7 +115,10 @@ class PlannerAgent:
             return None
 
         try:
-            data = json.loads(result.message)
+            text = result.message.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            data = json.loads(text)
             ptype = data.get("type")
             if ptype == "leaf":
                 return PlanAssessment(is_leaf=True)
