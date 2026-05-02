@@ -29,10 +29,9 @@ class Orchestrator:
         self._workspace = WorkspaceManager(config)
         self._refresh_event = asyncio.Event()
         self._ssh_index = 0
+        self._github = GitHubClient(config.tracker)
         self._planner_runner = None
-        self._github = None
         if config.planner:
-            self._github = GitHubClient(config.tracker)
             self._planner_runner = PlannerRunner(config.planner, config.codex, self._github)
 
     def _has_slot(self, issue: Issue) -> bool:
@@ -238,7 +237,11 @@ class Orchestrator:
                 if session:
                     self._state.token_totals.input_tokens += session.tokens.input_tokens
                     self._state.token_totals.output_tokens += session.tokens.output_tokens
-                self._schedule_retry(issue, attempt=None, error="")
+                self._state.claimed.discard(issue.id)
+                self._state.completed.add(issue.id)
+            if self._config.tracker.terminal_labels:
+                await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
+            asyncio.create_task(self._workspace.remove(issue))
         except asyncio.CancelledError:
             async with self._lock:
                 session = self._state.running.pop(issue.id, None)
