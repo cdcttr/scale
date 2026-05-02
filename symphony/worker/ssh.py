@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 from typing import Callable, Optional
 
 from symphony.agent.claude import ClaudeRunner, parse_stream_event
@@ -31,8 +32,8 @@ class SSHWorker(Worker):
         self._config = config
 
     def _build_remote_cmd(self, local_cmd: list[str]) -> list[str]:
-        inner = " ".join(f"'{a}'" for a in local_cmd)
-        return ["ssh", "-T", self._host, f"bash -lc {inner!r}"]
+        inner = " ".join(shlex.quote(a) for a in local_cmd)
+        return ["ssh", "-T", self._host, f"bash -lc {shlex.quote(inner)}"]
 
     async def run(
         self,

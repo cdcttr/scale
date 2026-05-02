@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shlex
 import pytest
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +139,23 @@ def test_ssh_worker_build_remote_cmd():
     assert remote[:3] == ["ssh", "-T", "user@host"]
     assert "bash -lc" in remote[3]
     assert "hello world" in remote[3]
+
+
+def test_ssh_worker_build_remote_cmd_no_shell_injection():
+    """Prompt containing shell metacharacters must be passed literally to claude."""
+    ws = MagicMock()
+    worker = SSHWorker("user@host", ws, _config())
+    malicious = "'; echo INJECTED; echo '"
+    local_cmd = ["claude", "--print", "-p", malicious]
+    remote = worker._build_remote_cmd(local_cmd)
+
+    cmd_str = remote[3]
+    assert cmd_str.startswith("bash -lc ")
+    # Extract the single argument passed to bash -lc, then parse the inner command
+    lc_args = shlex.split(cmd_str[len("bash -lc "):])
+    assert len(lc_args) == 1, "bash -lc must receive exactly one argument"
+    parsed_args = shlex.split(lc_args[0])
+    assert malicious in parsed_args, "malicious prompt must appear verbatim as an arg"
 
 
 @pytest.mark.asyncio
