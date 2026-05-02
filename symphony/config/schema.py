@@ -45,6 +45,7 @@ class CodexConfig(BaseModel):
 
 class ServerConfig(BaseModel):
     port: int
+    api_token: str
 
 
 class WorkerConfig(BaseModel):

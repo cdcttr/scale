@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import ValidationError
 from symphony.config.schema import (
     WorkflowConfig, TrackerConfig, AgentConfig,
-    CodexConfig, WorkerConfig, TriageConfig,
+    CodexConfig, WorkerConfig, TriageConfig, ServerConfig,
 )
 
 def test_tracker_config_required_fields():
@@ -31,6 +31,17 @@ def test_workflow_config_defaults():
     assert cfg.codex.stall_timeout_ms == 300000
     assert cfg.server is None
     assert cfg.worker.ssh_hosts == []
+
+def test_server_config_requires_api_token():
+    with pytest.raises(ValidationError):
+        ServerConfig(port=8080)
+
+
+def test_server_config_with_api_token():
+    sc = ServerConfig(port=8080, api_token="my-secret")
+    assert sc.api_token == "my-secret"
+    assert sc.port == 8080
+
 
 def test_agent_config_per_state_defaults():
     a = AgentConfig()
