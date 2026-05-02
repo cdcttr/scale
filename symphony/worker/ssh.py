@@ -33,7 +33,7 @@ class SSHWorker(Worker):
 
     def _build_remote_cmd(self, local_cmd: list[str]) -> list[str]:
         inner = " ".join(shlex.quote(a) for a in local_cmd)
-        return ["ssh", "-T", self._host, f"bash -lc {shlex.quote(inner)}"]
+        return ["ssh", "-T", self._host, "bash -lc " + shlex.quote(inner)]
 
     async def run(
         self,

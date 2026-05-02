@@ -209,3 +209,16 @@ async def test_ssh_worker_fires_on_event(tmp_path: Path):
         await worker.run(_issue(), config, attempt=None, on_event=seen.append)
 
     assert any(e.get("type") == "assistant" for e in seen)
+
+
+def test_ssh_worker_build_remote_cmd_injection_safety():
+    ws = MagicMock()
+    worker = SSHWorker("user@host", ws, _config())
+    injection = "'; echo INJECTED; echo '"
+    local_cmd = ["claude", "--print", "-p", injection]
+    remote = worker._build_remote_cmd(local_cmd)
+    parts = shlex.split(remote[3])
+    assert parts[:2] == ["bash", "-lc"]
+    inner_parts = shlex.split(parts[2])
+    p_idx = inner_parts.index("-p")
+    assert inner_parts[p_idx + 1] == injection
