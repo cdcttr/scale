@@ -106,6 +106,25 @@ async def test_local_worker_after_hook_runs_on_failure(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_local_worker_writes_agent_log(tmp_path: Path):
+    config = _config()
+    ws = _mock_workspace(tmp_path)
+    worker = LocalWorker(ws, config)
+    worker._runner.run_turn = AsyncMock(
+        return_value=TurnResult(success=True, usage=TokenUsage(10, 5), stderr="some warning")
+    )
+
+    await worker.run(_issue(), config, attempt=None)
+
+    log = (tmp_path / "agent.log").read_text()
+    assert "PROMPT:" in log
+    assert "Fix it" in log  # rendered from template
+    assert "RESULT: success=True" in log
+    assert "STDERR:" in log
+    assert "some warning" in log
+
+
+@pytest.mark.asyncio
 async def test_local_worker_first_turn_uses_rendered_prompt(tmp_path: Path):
     config = _config()
     ws = _mock_workspace(tmp_path)

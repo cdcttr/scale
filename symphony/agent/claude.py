@@ -26,6 +26,7 @@ class TurnResult:
     success: bool
     usage: Optional[TokenUsage]
     message: str = ""
+    stderr: str = ""
 
 
 def parse_stream_event(line: str) -> Optional[TurnResult]:
@@ -107,11 +108,12 @@ class ClaudeRunner:
         stderr_bytes = await proc.stderr.read() if proc.stderr else b""
         await proc.wait()
 
+        stderr_text = stderr_bytes.decode(errors="replace").strip()
         if proc.returncode != 0 and result is None:
-            stderr_text = stderr_bytes.decode(errors="replace").strip()
             if stderr_text:
                 logger.debug("claude stderr: %s", stderr_text)
-            return TurnResult(success=False, usage=None, message=f"Exit code {proc.returncode}")
+            return TurnResult(success=False, usage=None, message=f"Exit code {proc.returncode}", stderr=stderr_text)
         if result is None:
-            return TurnResult(success=False, usage=None, message="No result event received")
+            return TurnResult(success=False, usage=None, message="No result event received", stderr=stderr_text)
+        result.stderr = stderr_text
         return result
