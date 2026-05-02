@@ -25,6 +25,8 @@ def _make_proc(lines: list[str], returncode: int = 0):
     proc = MagicMock()
     proc.returncode = returncode
     proc.stdout = _Stdout(lines)
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
     proc.wait = AsyncMock()
     return proc
 

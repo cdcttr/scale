@@ -60,6 +60,7 @@ class ClaudeRunner:
             self._config.command,
             "--print",
             "--output-format", "stream-json",
+            "--verbose",
             "--dangerously-skip-permissions",
             "--max-turns", "1",
         ]
@@ -103,9 +104,13 @@ class ClaudeRunner:
                 except json.JSONDecodeError:
                     pass
 
+        stderr_bytes = await proc.stderr.read() if proc.stderr else b""
         await proc.wait()
 
         if proc.returncode != 0 and result is None:
+            stderr_text = stderr_bytes.decode(errors="replace").strip()
+            if stderr_text:
+                logger.debug("claude stderr: %s", stderr_text)
             return TurnResult(success=False, usage=None, message=f"Exit code {proc.returncode}")
         if result is None:
             return TurnResult(success=False, usage=None, message="No result event received")
