@@ -280,3 +280,53 @@ def test_build_table_active_session_not_dim():
 
     table = _build_table(_orch(state))
     assert table is not None
+
+
+# ---------------------------------------------------------------------------
+# Column layout
+# ---------------------------------------------------------------------------
+
+def test_issue_number_column_is_narrow():
+    table = _build_table(_orch(OrchestratorState()))
+    assert table.columns[0].width == 6
+    assert table.columns[0].no_wrap is True
+
+
+def test_title_column_has_ratio():
+    table = _build_table(_orch(OrchestratorState()))
+    assert table.columns[1].ratio == 1
+
+
+def test_issue_number_cell_has_no_extra_leading_spaces():
+    state = OrchestratorState()
+    task = MagicMock()
+    session = LiveSession(issue=_issue(17), task=task)
+    session.tokens = TokenTotals(input_tokens=0, output_tokens=0)
+    state.running["i17"] = session
+
+    table = _build_table(_orch(state))
+    col0_cells = [str(c) for c in table.columns[0]._cells]
+    assert "#17" in col0_cells
+    assert "  #17" not in col0_cells
+
+
+def test_title_truncated_at_60_chars():
+    long_title = "A" * 70
+    issue = Issue(
+        id="i1", identifier="o/r#1", number=1, title=long_title,
+        description="", state="active", labels=[], branch_name="b/1",
+        url="https://example.com", priority=None,
+        created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1),
+    )
+    state = OrchestratorState()
+    task = MagicMock()
+    session = LiveSession(issue=issue, task=task)
+    session.tokens = TokenTotals(input_tokens=0, output_tokens=0)
+    state.running["i1"] = session
+
+    console = Console(file=StringIO(), width=300, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "A" * 60 in output
+    assert "A" * 61 not in output
