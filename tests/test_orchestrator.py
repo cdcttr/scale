@@ -1,8 +1,10 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import pytest
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from scale.orchestrator.core import Orchestrator
 from scale.orchestrator.state import CompletedSession, LiveSession, RetryEntry, TokenTotals
@@ -962,3 +964,171 @@ async def test_tick_summary_counts_are_accurate(caplog):
     assert len(tick_lines) >= 1
     last = tick_lines[-1]
     assert "completed=3" in last
+
+
+# ---------------------------------------------------------------------------
+# _record_stats
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_record_stats_posts_github_comment(tmp_path):
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock()
+
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.turn_count = 5
+    session.tokens.input_tokens = 1000
+    session.tokens.output_tokens = 500
+
+    with patch("scale.orchestrator.core.Path", return_value=tmp_path / "stats.jsonl"):
+        await orch._record_stats(issue, session, success=True, attempt=None)
+
+    orch._github.post_comment.assert_called_once()
+    call_args = orch._github.post_comment.call_args
+    assert call_args[0][0] == issue.number
+    body = call_args[0][1]
+    assert "<!-- scale-stats" in body
+    assert '"success": true' in body
+    assert "Scale run complete" in body
+    assert "Turns:" in body
+
+
+@pytest.mark.asyncio
+async def test_record_stats_writes_to_stats_jsonl(tmp_path):
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock()
+
+    issue = _issue(number=42)
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.turn_count = 7
+    session.tokens.input_tokens = 2000
+    session.tokens.output_tokens = 800
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.Path", return_value=stats_file):
+        await orch._record_stats(issue, session, success=True, attempt=None)
+
+    assert stats_file.exists()
+    line = stats_file.read_text().strip()
+    record = json.loads(line)
+    assert record["issue"] == 42
+    assert record["turns"] == 7
+    assert record["input_tokens"] == 2000
+    assert record["output_tokens"] == 800
+    assert record["success"] is True
+    assert "timestamp" in record
+
+
+@pytest.mark.asyncio
+async def test_record_stats_includes_failure_flag(tmp_path):
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock()
+
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.Path", return_value=stats_file):
+        await orch._record_stats(issue, session, success=False, attempt=1)
+
+    record = json.loads(stats_file.read_text().strip())
+    assert record["success"] is False
+    assert record["attempt"] == 2
+
+    body = orch._github.post_comment.call_args[0][1]
+    assert '"success": false' in body
+
+
+@pytest.mark.asyncio
+async def test_record_stats_called_on_worker_success(tmp_path):
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        pass
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()), \
+         patch("scale.orchestrator.core.Path", return_value=stats_file):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert stats_file.exists()
+    record = json.loads(stats_file.read_text().strip())
+    assert record["success"] is True
+    assert record["issue"] == issue.number
+
+
+@pytest.mark.asyncio
+async def test_record_stats_called_on_worker_failure(tmp_path):
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run_fail(iss, cfg, attempt, on_event=None):
+        raise RuntimeError("agent crashed")
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
+         patch("scale.orchestrator.core.Path", return_value=stats_file):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run_fail
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert stats_file.exists()
+    record = json.loads(stats_file.read_text().strip())
+    assert record["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_record_stats_github_failure_does_not_crash(tmp_path):
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock(side_effect=RuntimeError("network error"))
+
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.Path", return_value=stats_file):
+        await orch._record_stats(issue, session, success=True, attempt=None)  # must not raise
+
+    assert stats_file.exists()
