@@ -1,3 +1,4 @@
+import asyncio
 import json
 import pytest
 from pathlib import Path
@@ -161,3 +162,38 @@ async def test_run_turn_passes_model_to_cmd(tmp_path: Path):
     assert "--model" in cmd_args
     idx = list(cmd_args).index("--model")
     assert cmd_args[idx + 1] == "claude-haiku-4-5-20251001"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_uses_large_stream_limit(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+        await _runner().run_turn(tmp_path, "prompt", False)
+    assert mock_exec.call_args.kwargs.get("limit") == 8 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_run_turn_large_line_succeeds(tmp_path: Path):
+    large_payload = "x" * (65 * 1024)
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": large_payload,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    line_bytes = (event + "\n").encode()
+    reader = asyncio.StreamReader(limit=8 * 1024 * 1024)
+    reader.feed_data(line_bytes)
+    reader.feed_eof()
+
+    proc = MagicMock()
+    proc.returncode = 0
+    proc.stdout = reader
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        result = await _runner().run_turn(tmp_path, "prompt", False)
+    assert result.success
