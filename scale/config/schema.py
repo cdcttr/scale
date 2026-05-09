@@ -58,6 +58,7 @@ class TriageConfig(BaseModel):
     model: str = "claude-haiku-4-5-20251001"
     ready_label: str = "scale:ready"
     needs_detail_label: str = "scale:needs-detail"
+    needs_approval_label: str = "scale:needs-approval"
     triaged_label: str = "scale:triaged"
 
 

@@ -122,6 +122,7 @@ class Orchestrator:
                     self._config.triage.triaged_label,
                     self._config.triage.ready_label,
                     self._config.triage.needs_detail_label,
+                    self._config.triage.needs_approval_label,
                     *self._config.tracker.skip_labels,
                     *self._config.tracker.terminal_labels,
                 }

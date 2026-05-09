@@ -121,3 +121,41 @@ async def test_assess_passes_model_to_runner(tmp_path: Path):
         await agent.assess(_issue(), [], tmp_path)
     call_kwargs = mock_run.call_args[1]
     assert call_kwargs.get("model") == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_assess_returns_needs_approval_assessment(tmp_path: Path):
+    payload = json.dumps({
+        "ready": False,
+        "needs_approval": True,
+        "summary": "Well-specified but touches core orchestration.",
+        "reasons": ["Touches core dispatch loop"],
+        "comment": "## Symphony Triage\n\n**Status: Needs Approval ⚠️**",
+    })
+    agent = TriageAgent(_config(), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn_result(payload))):
+        result = await agent.assess(_issue(), [], tmp_path)
+    assert result is not None
+    assert result.ready is False
+    assert result.needs_approval is True
+    assert result.summary == "Well-specified but touches core orchestration."
+
+
+@pytest.mark.asyncio
+async def test_assess_needs_approval_false_by_default(tmp_path: Path):
+    payload = json.dumps({
+        "ready": True,
+        "summary": "Clear and actionable.",
+        "reasons": [],
+        "comment": "## Symphony Triage\n\n**Status: Ready ✅**",
+    })
+    agent = TriageAgent(_config(), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn_result(payload))):
+        result = await agent.assess(_issue(), [], tmp_path)
+    assert result is not None
+    assert result.needs_approval is False
+
+
+def test_system_prompt_mentions_needs_approval():
+    from scale.triage.agent import _SYSTEM_PROMPT
+    assert "needs_approval" in _SYSTEM_PROMPT or "needs-approval" in _SYSTEM_PROMPT
