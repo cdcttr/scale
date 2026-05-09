@@ -9,5 +9,6 @@ build/
 venv/
 workspaces/
 logs/
+!scale/logs/
 stats.jsonl
 .coverage
