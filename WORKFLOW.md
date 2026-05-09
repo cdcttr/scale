@@ -102,6 +102,13 @@ gh pr create \
   --body "Closes #{{ issue.number }}"
 ```
 
+## Efficiency rules
+
+- Read each file **once**. Do not re-read a file you have already read in this session.
+- You have a **20-turn budget**. Write failing tests by turn 3, implementation by turn 6, PR by turn 15.
+- Do not invoke brainstorming or planning skills — the issue is your spec. Read it, implement it.
+- If you have read more than 5 files and have not written any code, stop exploring and start writing.
+
 ## Coding conventions
 
 - No comments unless the WHY is genuinely non-obvious (hidden constraint, subtle invariant, workaround for a specific external bug). Never comment what the code does.
