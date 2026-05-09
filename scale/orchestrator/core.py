@@ -13,6 +13,7 @@ from scale.tracker.base import TrackerClient
 from scale.tracker.github import GitHubClient
 from scale.tracker.models import Issue
 from scale.worker.local import LocalWorker
+from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
 from scale.planner.runner import PlannerRunner
@@ -147,6 +148,18 @@ class Orchestrator:
                             asyncio.create_task(self._run_planner(issue))
             except Exception as e:
                 logger.warning("Plan issue fetch failed: %s", e)
+        if self._config.review:
+            try:
+                pr_open_issues = await self._github.fetch_issues_by_label(
+                    self._config.review.pr_open_label
+                )
+                async with self._lock:
+                    for issue in pr_open_issues:
+                        if issue.id not in self._state.claimed:
+                            self._state.claimed.add(issue.id)
+                            asyncio.create_task(self._run_reviewer(issue))
+            except Exception as e:
+                logger.warning("Review dispatch failed: %s", e)
         try:
             issues = await self._tracker.fetch_candidate_issues()
         except Exception as e:
@@ -293,7 +306,9 @@ class Orchestrator:
                 if session:
                     session.finishing = True
                 self._state.claimed.discard(issue.id)
-            if self._config.tracker.terminal_labels:
+            if self._config.review:
+                await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
+            elif self._config.tracker.terminal_labels:
                 await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             asyncio.create_task(self._workspace.remove(issue))
         except asyncio.CancelledError:
@@ -330,6 +345,32 @@ class Orchestrator:
             await self._triage_runner.triage_issue(issue)
         except Exception as e:
             logger.error("Triage failed for issue #%d: %s", issue.number, e)
+        finally:
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
+
+    async def _run_reviewer(self, issue: Issue) -> None:
+        assert self._config.review is not None
+        review = self._config.review
+        try:
+            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            if pr is None:
+                logger.warning("No open PR found for issue #%d, skipping review", issue.number)
+                return
+            pr_number: int = pr["number"]
+            pr_url: str = pr["html_url"]
+            pr_diff = await self._github.fetch_pr_diff(pr_number)
+            worker = ReviewWorker(self._config)
+            await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
+            if self._config.tracker.terminal_labels:
+                await self._github.add_labels(
+                    issue.number, [self._config.tracker.terminal_labels[0]]
+                )
+            await self._github.remove_label(issue.number, review.pr_open_label)
+        except Exception as e:
+            logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
+            await self._github.add_labels(issue.number, [review.conflict_label])
+            await self._github.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
                 self._state.claimed.discard(issue.id)

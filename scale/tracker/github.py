@@ -31,6 +31,7 @@ class GitHubClient(TrackerClient):
     def __init__(self, config: TrackerConfig) -> None:
         self._config = config
         owner, repo = config.repo.split('/', 1)
+        self._owner = owner
         self._base = f"https://api.github.com/repos/{owner}/{repo}"
         self._headers = {
             "Authorization": f"Bearer {config.api_token}",
@@ -220,3 +221,24 @@ class GitHubClient(TrackerClient):
             for item in items
             if "pull_request" not in item
         ]
+
+    async def fetch_pr_for_branch(self, branch_name: str) -> Optional[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{self._base}/pulls",
+                headers=self._headers,
+                params={"head": f"{self._owner}:{branch_name}", "state": "open"},
+            )
+            r.raise_for_status()
+            prs = r.json()
+            return prs[0] if prs else None
+
+    async def fetch_pr_diff(self, pr_number: int) -> str:
+        diff_headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{self._base}/pulls/{pr_number}",
+                headers=diff_headers,
+            )
+            r.raise_for_status()
+            return r.text

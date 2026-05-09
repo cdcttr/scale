@@ -16,9 +16,8 @@ _SAFETY_PREAMBLE = (
 )
 
 
-def render_prompt(template: str, issue: Issue, attempt: Optional[int]) -> str:
-    tmpl = _env.from_string(template)
-    issue_ctx = {
+def _issue_ctx(issue: Issue) -> dict:
+    return {
         "id": issue.id,
         "identifier": issue.identifier,
         "number": issue.number,
@@ -30,4 +29,24 @@ def render_prompt(template: str, issue: Issue, attempt: Optional[int]) -> str:
         "url": issue.url,
         "priority": issue.priority,
     }
-    return _SAFETY_PREAMBLE + tmpl.render(issue=issue_ctx, attempt=attempt)
+
+
+def render_prompt(template: str, issue: Issue, attempt: Optional[int]) -> str:
+    tmpl = _env.from_string(template)
+    return _SAFETY_PREAMBLE + tmpl.render(issue=_issue_ctx(issue), attempt=attempt)
+
+
+def render_review_prompt(
+    template: str,
+    issue: Issue,
+    pr_number: int,
+    pr_url: str,
+    pr_diff: str,
+) -> str:
+    tmpl = _env.from_string(template)
+    pr_ctx = {
+        "number": pr_number,
+        "url": pr_url,
+        "diff": pr_diff,
+    }
+    return _SAFETY_PREAMBLE + tmpl.render(issue=_issue_ctx(issue), pr=pr_ctx)
