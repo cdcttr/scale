@@ -11,7 +11,7 @@ from scale.planner.agent import PlannerAgent
 
 log = logging.getLogger(__name__)
 
-_MARKER_PREFIX = "<!-- symphony-plan "
+_MARKER_PREFIX = "<!-- scale-plan "
 _MARKER_SUFFIX = " -->"
 
 
@@ -35,7 +35,7 @@ def _build_marker(children: list[int], depth: int) -> str:
 def _get_depth(issue: Issue) -> int:
     depths = []
     for label in issue.labels:
-        if label.startswith("symphony:depth:"):
+        if label.startswith("scale:depth:"):
             try:
                 depths.append(int(label.split(":")[-1]))
             except ValueError:
@@ -106,7 +106,7 @@ class PlannerRunner:
 
         child_numbers: list[int] = []
         child_depth = depth + 1
-        depth_label = f"symphony:depth:{child_depth}"
+        depth_label = f"scale:depth:{child_depth}"
 
         try:
             for child_spec in assessment.children:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from scale.tracker.models import Issue
 log = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a planning agent for an autonomous coding system called Symphony.
+You are a planning agent for an autonomous coding system called Scale.
 Your job is to assess whether a GitHub issue can be implemented directly as a
 leaf task, or needs to be broken into smaller child issues first.
 
@@ -116,8 +117,13 @@ class PlannerAgent:
 
         try:
             text = result.message.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+            if m:
+                text = m.group(1).strip()
+            else:
+                start, end = text.find("{"), text.rfind("}")
+                if start != -1 and end != -1:
+                    text = text[start:end + 1]
             data = json.loads(text)
             ptype = data.get("type")
             if ptype == "leaf":
