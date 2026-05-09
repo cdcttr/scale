@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from scale.orchestrator.core import Orchestrator
 from scale.orchestrator.state import LiveSession, RetryEntry
-from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig
+from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig, TriageConfig
 from scale.tracker.models import Issue
 from scale.worker.local import LocalWorker
 from scale.worker.ssh import SSHWorker
@@ -420,3 +420,153 @@ async def test_watch_planned_closes_parent_when_all_children_done():
 
     mock_add.assert_called_once_with(42, ["symphony:done"])
     mock_remove.assert_called_once_with(42, "symphony:planned")
+
+
+# ---------------------------------------------------------------------------
+# Triage integration
+# ---------------------------------------------------------------------------
+
+def _config_with_triage(**kwargs) -> WorkflowConfig:
+    return WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        prompt_template="Work on {{ issue.title }}.",
+        triage=TriageConfig(**kwargs),
+    )
+
+
+def _untriaged_issue(number=20) -> Issue:
+    return Issue(
+        id=f"ut{number}", identifier=f"o/r#{number}", number=number,
+        title="Untriaged feature", description="", state="active",
+        labels=[], branch_name=f"symphony/{number}-untriaged-feature",
+        url="https://example.com", priority=None,
+        created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tick_dispatches_untriaged_issues_to_triage_runner():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    issue = _untriaged_issue()
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._github = AsyncMock()
+        orch._github.fetch_open_issues.return_value = [issue]
+        with patch.object(orch, "_run_triage", AsyncMock()) as mock_run_triage:
+            await orch._tick()
+            await asyncio.sleep(0)
+
+    mock_run_triage.assert_called_once()
+    assert mock_run_triage.call_args[0][0].number == 20
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_triage_when_not_configured():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    orch._github = AsyncMock()
+    await orch._tick()
+    orch._github.fetch_open_issues.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_issues_that_have_triage_labels():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    triaged_issue = _untriaged_issue()
+    triaged_issue.labels = ["symphony:triaged"]
+
+    ready_issue = _untriaged_issue(number=21)
+    ready_issue.labels = ["symphony:ready"]
+
+    needs_detail_issue = _untriaged_issue(number=22)
+    needs_detail_issue.labels = ["symphony:needs-detail"]
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._github = AsyncMock()
+        orch._github.fetch_open_issues.return_value = [
+            triaged_issue, ready_issue, needs_detail_issue
+        ]
+        with patch.object(orch, "_run_triage", AsyncMock()) as mock_run_triage:
+            await orch._tick()
+            await asyncio.sleep(0)
+
+    mock_run_triage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tick_does_not_retriage_claimed_issues():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    issue = _untriaged_issue()
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._state.claimed.add(issue.id)
+        orch._github = AsyncMock()
+        orch._github.fetch_open_issues.return_value = [issue]
+        with patch.object(orch, "_run_triage", AsyncMock()) as mock_run_triage:
+            await orch._tick()
+            await asyncio.sleep(0)
+
+    mock_run_triage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_triage_releases_claim_on_success():
+    tracker = AsyncMock()
+    issue = _untriaged_issue()
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._state.claimed.add(issue.id)
+        orch._triage_runner = AsyncMock()
+        orch._triage_runner.triage_issue = AsyncMock()
+        await orch._run_triage(issue)
+
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_run_triage_releases_claim_on_error():
+    tracker = AsyncMock()
+    issue = _untriaged_issue()
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._state.claimed.add(issue.id)
+        orch._triage_runner = AsyncMock()
+        orch._triage_runner.triage_issue = AsyncMock(side_effect=RuntimeError("ai error"))
+        await orch._run_triage(issue)
+
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_tick_triage_fetch_failure_does_not_crash():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._github = AsyncMock()
+        orch._github.fetch_open_issues.side_effect = RuntimeError("network down")
+        await orch._tick()  # must not raise
