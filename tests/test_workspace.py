@@ -5,10 +5,10 @@ from scale.workspace.manager import WorkspaceManager, sanitize_identifier
 from scale.tracker.models import Issue
 from scale.config.schema import WorkflowConfig, TrackerConfig, WorkspaceConfig, HooksConfig
 
-def _config(root: str, **hook_kwargs) -> WorkflowConfig:
+def _config(root: str, log_archive: str | None = None, **hook_kwargs) -> WorkflowConfig:
     return WorkflowConfig(
         tracker=TrackerConfig(kind="github", repo="owner/repo", api_token="tok"),
-        workspace=WorkspaceConfig(root=root),
+        workspace=WorkspaceConfig(root=root, log_archive=log_archive),
         hooks=HooksConfig(**hook_kwargs) if hook_kwargs else HooksConfig(),
     )
 
@@ -133,3 +133,54 @@ async def test_hook_timeout_raises(tmp_path):
     await mgr.prepare(_issue(), hooks_enabled=False)
     with pytest.raises(RuntimeError, match="timed out"):
         await mgr.run_before_hook(_issue())
+
+
+# --- log archiving ---
+
+@pytest.mark.asyncio
+async def test_remove_archives_agent_log(tmp_path):
+    archive_dir = tmp_path / "logs"
+    mgr = WorkspaceManager(_config(str(tmp_path), log_archive=str(archive_dir)))
+    path = await mgr.prepare(_issue(), hooks_enabled=False)
+    (path / "agent.log").write_text("turn 1\nturn 2\n")
+    await mgr.remove(_issue(), hooks_enabled=False)
+    archived = list(archive_dir.glob("42-*.log"))
+    assert len(archived) == 1
+    assert archived[0].read_text() == "turn 1\nturn 2\n"
+
+
+@pytest.mark.asyncio
+async def test_remove_without_log_archive_skips_copy(tmp_path):
+    mgr = WorkspaceManager(_config(str(tmp_path)))
+    path = await mgr.prepare(_issue(), hooks_enabled=False)
+    (path / "agent.log").write_text("some logs\n")
+    await mgr.remove(_issue(), hooks_enabled=False)
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_remove_with_archive_creates_archive_dir(tmp_path):
+    archive_dir = tmp_path / "nested" / "logs"
+    mgr = WorkspaceManager(_config(str(tmp_path), log_archive=str(archive_dir)))
+    path = await mgr.prepare(_issue(), hooks_enabled=False)
+    (path / "agent.log").write_text("data\n")
+    await mgr.remove(_issue(), hooks_enabled=False)
+    assert archive_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_remove_missing_agent_log_does_not_raise(tmp_path):
+    archive_dir = tmp_path / "logs"
+    mgr = WorkspaceManager(_config(str(tmp_path), log_archive=str(archive_dir)))
+    await mgr.prepare(_issue(), hooks_enabled=False)
+    await mgr.remove(_issue(), hooks_enabled=False)  # no agent.log present
+
+
+@pytest.mark.asyncio
+async def test_remove_still_deletes_workspace_after_archive(tmp_path):
+    archive_dir = tmp_path / "logs"
+    mgr = WorkspaceManager(_config(str(tmp_path), log_archive=str(archive_dir)))
+    path = await mgr.prepare(_issue(), hooks_enabled=False)
+    (path / "agent.log").write_text("data\n")
+    await mgr.remove(_issue(), hooks_enabled=False)
+    assert not path.exists()

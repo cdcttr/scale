@@ -3,6 +3,7 @@ import asyncio
 import logging
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from scale.config.schema import WorkflowConfig
@@ -21,6 +22,7 @@ class WorkspaceManager:
     def __init__(self, config: WorkflowConfig) -> None:
         self._root = Path(config.workspace.root)
         self._hooks = config.hooks
+        self._log_archive = Path(config.workspace.log_archive) if config.workspace.log_archive else None
 
     def _path(self, issue: Issue) -> Path:
         name = sanitize_identifier(issue.identifier)
@@ -79,4 +81,11 @@ class WorkspaceManager:
                 await self._run_hook(self._hooks.before_remove, path)
             except Exception as e:
                 logger.warning("before_remove hook failed (ignored): %s", e)
+        if self._log_archive is not None:
+            log_file = path / "agent.log"
+            if log_file.exists():
+                self._log_archive.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                dest = self._log_archive / f"{issue.number}-{timestamp}.log"
+                shutil.copy2(log_file, dest)
         shutil.rmtree(path, ignore_errors=True)
