@@ -277,9 +277,12 @@ class Orchestrator:
                 session.last_event_at = datetime.now(tz=timezone.utc)
                 if event.get("type") == "assistant":
                     session.turn_count += 1
-                if event.get("type") == "result":
-                    usage = event.get("usage", {})
-                    session.tokens.input_tokens += usage.get("input_tokens", 0)
+                    usage = (event.get("message") or {}).get("usage") or {}
+                    session.tokens.input_tokens += (
+                        usage.get("input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                    )
                     session.tokens.output_tokens += usage.get("output_tokens", 0)
 
         try:

@@ -84,7 +84,7 @@ async def test_token_totals_accumulated_on_success():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
@@ -121,7 +121,7 @@ async def test_token_totals_accumulate_across_sessions():
 
         async def _mock_run(iss, cfg, attempt, on_event=None, _i=inp_cap, _o=out_cap):
             if on_event:
-                on_event({"type": "result", "usage": {"input_tokens": _i, "output_tokens": _o}})
+                on_event({"type": "assistant", "message": {"usage": {"input_tokens": _i, "output_tokens": _o}}})
 
         with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
              patch.object(orch._github, "add_labels", AsyncMock()), \
@@ -360,7 +360,7 @@ async def test_fire_retries_reschedules_when_at_capacity():
 
 
 @pytest.mark.asyncio
-async def test_on_event_accumulates_tokens_across_multiple_result_events():
+async def test_on_event_accumulates_tokens_across_multiple_assistant_events():
     """on_event must += tokens so each turn's usage is summed, not overwritten."""
     tracker = AsyncMock()
     tracker.fetch_terminal_issues.return_value = []
@@ -371,8 +371,8 @@ async def test_on_event_accumulates_tokens_across_multiple_result_events():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
-            on_event({"type": "result", "usage": {"input_tokens": 200, "output_tokens": 80}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 200, "output_tokens": 80}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
@@ -421,6 +421,47 @@ async def test_on_event_increments_turn_count_on_assistant():
         await orch._run_worker(issue, attempt=None)
 
     assert captured_turn_counts == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_on_event_accumulates_tokens_from_assistant_event_including_cache():
+    """on_event reads usage from assistant events, summing all cache token variants."""
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    captured_tokens: list[tuple[int, int]] = []
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({
+                "type": "assistant",
+                "message": {
+                    "usage": {
+                        "input_tokens": 3,
+                        "cache_creation_input_tokens": 11072,
+                        "cache_read_input_tokens": 15912,
+                        "output_tokens": 8,
+                    }
+                },
+            })
+            s = orch._state.running.get(issue.id)
+            if s:
+                captured_tokens.append((s.tokens.input_tokens, s.tokens.output_tokens))
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert captured_tokens == [(26987, 8)]  # 3 + 11072 + 15912, 8
 
 
 def test_triage_subcommand_help(capsys):
@@ -706,7 +747,7 @@ async def test_completed_session_appended_on_success():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
