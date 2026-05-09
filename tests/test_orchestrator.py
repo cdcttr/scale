@@ -84,7 +84,7 @@ async def test_token_totals_accumulated_on_success():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
@@ -121,7 +121,7 @@ async def test_token_totals_accumulate_across_sessions():
 
         async def _mock_run(iss, cfg, attempt, on_event=None, _i=inp_cap, _o=out_cap):
             if on_event:
-                on_event({"type": "result", "usage": {"input_tokens": _i, "output_tokens": _o}})
+                on_event({"type": "assistant", "message": {"usage": {"input_tokens": _i, "output_tokens": _o}}})
 
         with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
              patch.object(orch._github, "add_labels", AsyncMock()), \
@@ -360,7 +360,7 @@ async def test_fire_retries_reschedules_when_at_capacity():
 
 
 @pytest.mark.asyncio
-async def test_on_event_accumulates_tokens_across_multiple_result_events():
+async def test_on_event_accumulates_tokens_across_multiple_assistant_events():
     """on_event must += tokens so each turn's usage is summed, not overwritten."""
     tracker = AsyncMock()
     tracker.fetch_terminal_issues.return_value = []
@@ -371,8 +371,8 @@ async def test_on_event_accumulates_tokens_across_multiple_result_events():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
-            on_event({"type": "result", "usage": {"input_tokens": 200, "output_tokens": 80}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 200, "output_tokens": 80}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
@@ -706,7 +706,7 @@ async def test_completed_session_appended_on_success():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+            on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
     task = asyncio.create_task(asyncio.sleep(0))
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
@@ -853,3 +853,87 @@ async def test_expire_completed_keeps_recent_entries():
 
     assert len(orch._state.completed) == 1
     assert orch._state.completed[0] is recent_cs
+
+
+# ---------------------------------------------------------------------------
+# on_event token source: assistant vs result
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_on_event_updates_tokens_from_assistant_message_usage():
+    """Tokens must be read from assistant events (message.usage), not result events."""
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({
+                "type": "assistant",
+                "message": {
+                    "usage": {
+                        "input_tokens": 200,
+                        "output_tokens": 75,
+                        "cache_creation_input_tokens": 10,
+                        "cache_read_input_tokens": 5,
+                    }
+                },
+            })
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    await orch._flush_finishing()
+    assert orch._state.token_totals.input_tokens == 200
+    assert orch._state.token_totals.output_tokens == 75
+
+
+@pytest.mark.asyncio
+async def test_on_event_result_does_not_add_tokens():
+    """result events must not contribute to token counts to avoid double-counting."""
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({
+                "type": "assistant",
+                "message": {"usage": {"input_tokens": 100, "output_tokens": 50}},
+            })
+            on_event({
+                "type": "result",
+                "subtype": "success",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            })
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    await orch._flush_finishing()
+    assert orch._state.token_totals.input_tokens == 100
+    assert orch._state.token_totals.output_tokens == 50

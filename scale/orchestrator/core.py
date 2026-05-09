@@ -277,8 +277,7 @@ class Orchestrator:
                 session.last_event_at = datetime.now(tz=timezone.utc)
                 if event.get("type") == "assistant":
                     session.turn_count += 1
-                if event.get("type") == "result":
-                    usage = event.get("usage", {})
+                    usage = event.get("message", {}).get("usage", {})
                     session.tokens.input_tokens += usage.get("input_tokens", 0)
                     session.tokens.output_tokens += usage.get("output_tokens", 0)
 
