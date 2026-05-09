@@ -461,7 +461,7 @@ async def test_on_event_accumulates_tokens_from_assistant_event_including_cache(
         MockWorker.return_value = mock_w
         await orch._run_worker(issue, attempt=None)
 
-    assert captured_tokens == [(26987, 8)]  # 3 + 11072 + 15912, 8
+    assert captured_tokens == [(15915, 11080)]  # in: 3 + 15912 (cache_read); out: 8 + 11072 (cache_creation/thinking)
 
 
 def test_triage_subcommand_help(capsys):
