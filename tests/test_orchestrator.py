@@ -491,7 +491,7 @@ def _plan_issue(number=10) -> Issue:
     return Issue(
         id=f"plan{number}", identifier=f"o/r#{number}", number=number,
         title="Big concept", description="", state="active",
-        labels=["symphony:plan"], branch_name=f"symphony/{number}-big-concept",
+        labels=["scale:plan"], branch_name=f"symphony/{number}-big-concept",
         url="https://example.com", priority=None,
         created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1),
     )
@@ -533,7 +533,7 @@ async def test_watch_planned_closes_parent_when_all_children_done():
     tracker.fetch_terminal_issues.return_value = []
 
     parent = _issue(id_="parent1", number=42, state="active")
-    parent.labels = ["symphony:planned"]
+    parent.labels = ["scale:planned"]
     child1 = _issue(id_="c1", number=51, state="terminal")
     child2 = _issue(id_="c2", number=52, state="terminal")
 
@@ -549,8 +549,8 @@ async def test_watch_planned_closes_parent_when_all_children_done():
              patch.object(orch, "_gh_remove_label", AsyncMock()) as mock_remove:
             await orch._watch_planned_tick()
 
-    mock_add.assert_called_once_with(42, ["symphony:done"])
-    mock_remove.assert_called_once_with(42, "symphony:planned")
+    mock_add.assert_called_once_with(42, ["scale:done"])
+    mock_remove.assert_called_once_with(42, "scale:planned")
 
 
 # ---------------------------------------------------------------------------
@@ -617,13 +617,13 @@ async def test_tick_skips_issues_that_have_triage_labels():
     tracker.fetch_issues_by_numbers.return_value = []
 
     triaged_issue = _untriaged_issue()
-    triaged_issue.labels = ["symphony:triaged"]
+    triaged_issue.labels = ["scale:triaged"]
 
     ready_issue = _untriaged_issue(number=21)
-    ready_issue.labels = ["symphony:ready"]
+    ready_issue.labels = ["scale:ready"]
 
     needs_detail_issue = _untriaged_issue(number=22)
-    needs_detail_issue.labels = ["symphony:needs-detail"]
+    needs_detail_issue.labels = ["scale:needs-detail"]
 
     with patch("scale.orchestrator.core.TriageRunner"):
         orch = Orchestrator(_config_with_triage(), tracker)

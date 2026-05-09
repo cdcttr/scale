@@ -8,8 +8,8 @@ class TrackerConfig(BaseModel):
     repo: str
     api_token: str
     active_labels: list[str] = []
-    skip_labels: list[str] = ["symphony:skip"]
-    terminal_labels: list[str] = ["symphony:done"]
+    skip_labels: list[str] = ["scale:skip"]
+    terminal_labels: list[str] = ["scale:done"]
 
 
 class PollingConfig(BaseModel):
@@ -56,18 +56,18 @@ class WorkerConfig(BaseModel):
 
 class TriageConfig(BaseModel):
     model: str = "claude-haiku-4-5-20251001"
-    ready_label: str = "symphony:ready"
-    needs_detail_label: str = "symphony:needs-detail"
-    triaged_label: str = "symphony:triaged"
+    ready_label: str = "scale:ready"
+    needs_detail_label: str = "scale:needs-detail"
+    triaged_label: str = "scale:triaged"
 
 
 class PlannerConfig(BaseModel):
     model: str = "claude-sonnet-4-6"
     max_depth: int = 3
-    plan_label: str = "symphony:plan"
-    leaf_label: str = "symphony:leaf"
-    concept_label: str = "symphony:concept"
-    planned_label: str = "symphony:planned"
+    plan_label: str = "scale:plan"
+    leaf_label: str = "scale:leaf"
+    concept_label: str = "scale:concept"
+    planned_label: str = "scale:planned"
     planner_workspace: str = "./workspaces/_planner"
 
 
