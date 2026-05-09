@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from symphony.config.watcher import watch_workflow
+from scale.config.watcher import watch_workflow
 
 
 def _write_workflow(path: Path) -> None:
@@ -21,7 +21,7 @@ async def test_watch_workflow_calls_on_reload(tmp_path: Path):
     async def _mock_awatch(*args, **kwargs):
         yield {("modified", str(workflow))}
 
-    with patch("symphony.config.watcher.awatch", _mock_awatch):
+    with patch("scale.config.watcher.awatch", _mock_awatch):
         await watch_workflow(workflow, reloaded.append)
 
     assert len(reloaded) == 1
@@ -38,9 +38,9 @@ async def test_watch_workflow_keeps_last_config_on_error(tmp_path: Path):
     async def _mock_awatch(*args, **kwargs):
         yield {("modified", str(workflow))}
 
-    with patch("symphony.config.watcher.awatch", _mock_awatch):
+    with patch("scale.config.watcher.awatch", _mock_awatch):
         with patch(
-            "symphony.config.watcher.load_workflow",
+            "scale.config.watcher.load_workflow",
             side_effect=ValueError("bad yaml"),
         ):
             await watch_workflow(workflow, reloaded.append)
@@ -61,7 +61,7 @@ async def test_watch_workflow_multiple_changes(tmp_path: Path):
         yield change
         yield change
 
-    with patch("symphony.config.watcher.awatch", _mock_awatch):
+    with patch("scale.config.watcher.awatch", _mock_awatch):
         await watch_workflow(workflow, reloaded.append)
 
     assert len(reloaded) == 3

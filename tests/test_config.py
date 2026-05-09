@@ -3,7 +3,7 @@ import textwrap
 import pytest
 from pathlib import Path
 from pydantic import ValidationError
-from symphony.config.schema import (
+from scale.config.schema import (
     WorkflowConfig, TrackerConfig, AgentConfig,
     CodexConfig, WorkerConfig, TriageConfig, ServerConfig,
 )
@@ -52,7 +52,7 @@ def test_codex_approval_policy_only_auto():
         CodexConfig(approval_policy="manual")
 
 
-from symphony.config.loader import load_workflow, resolve_vars
+from scale.config.loader import load_workflow, resolve_vars
 
 def test_resolve_vars_substitutes_env(monkeypatch):
     monkeypatch.setenv("MY_TOKEN", "secret123")
@@ -136,7 +136,7 @@ def test_workflow_config_triage_set():
     assert wf.triage.triaged_label == "symphony:triaged"
 
 
-from symphony.config.schema import PlannerConfig
+from scale.config.schema import PlannerConfig
 
 def test_planner_config_defaults():
     cfg = PlannerConfig()
@@ -150,7 +150,7 @@ def test_planner_config_defaults():
 
 
 def test_workflow_config_planner_defaults_none():
-    from symphony.config.schema import WorkflowConfig, TrackerConfig
+    from scale.config.schema import WorkflowConfig, TrackerConfig
     cfg = WorkflowConfig(
         tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
         prompt_template="t",
@@ -159,7 +159,7 @@ def test_workflow_config_planner_defaults_none():
 
 
 def test_workflow_config_with_planner():
-    from symphony.config.schema import WorkflowConfig, TrackerConfig
+    from scale.config.schema import WorkflowConfig, TrackerConfig
     cfg = WorkflowConfig(
         tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
         prompt_template="t",

@@ -3,9 +3,9 @@ import pytest
 from datetime import datetime
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
-from symphony.api.server import create_app
-from symphony.orchestrator.state import OrchestratorState, LiveSession, TokenTotals
-from symphony.tracker.models import Issue
+from scale.api.server import create_app
+from scale.orchestrator.state import OrchestratorState, LiveSession, TokenTotals
+from scale.tracker.models import Issue
 
 _TOKEN = "test-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}

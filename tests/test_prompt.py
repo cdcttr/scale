@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
-from symphony.tracker.models import Issue
-from symphony.prompt.renderer import render_prompt, _SAFETY_PREAMBLE
+from scale.tracker.models import Issue
+from scale.prompt.renderer import render_prompt, _SAFETY_PREAMBLE
 
 def _issue(**kwargs) -> Issue:
     defaults = dict(
