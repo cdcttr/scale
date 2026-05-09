@@ -130,6 +130,8 @@ class Orchestrator:
                     for issue in all_open:
                         if issue.id in self._state.claimed:
                             continue
+                        if not issue.labels:
+                            continue
                         if any(label in triage_labels for label in issue.labels):
                             continue
                         self._state.claimed.add(issue.id)

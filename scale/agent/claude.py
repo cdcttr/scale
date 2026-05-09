@@ -85,6 +85,7 @@ class ClaudeRunner:
             cwd=str(workspace),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=8 * 1024 * 1024,
         )
 
         result: Optional[TurnResult] = None
