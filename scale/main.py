@@ -90,6 +90,19 @@ async def _triage(
     await runner.run(issues, force=force_all)
 
 
+async def _clean(
+    workflow_path: Path,
+    dry_run: bool,
+    all_workspaces: bool,
+    yes: bool,
+) -> None:
+    from scale.config.loader import load_workflow
+    from scale.clean import clean
+
+    config = load_workflow(workflow_path)
+    await clean(config, dry_run=dry_run, all_workspaces=all_workspaces, yes=yes)
+
+
 async def _plan(
     workflow_path: Path,
     issue_numbers: list[int],
@@ -195,6 +208,35 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
 
+    clean_p = sub.add_parser("clean", help="Remove stale workspace directories")
+    clean_p.add_argument(
+        "workflow",
+        nargs="?",
+        default="WORKFLOW.md",
+        help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    clean_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be removed without deleting",
+    )
+    clean_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_workspaces",
+        help="Remove all workspace directories regardless of issue state",
+    )
+    clean_p.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip confirmation prompt when used with --all",
+    )
+    clean_p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -224,6 +266,11 @@ def main() -> None:
             sys.exit(1)
         issue_numbers = [int(n.strip()) for n in args.issues.split(",")]
         asyncio.run(_plan(Path(args.workflow), issue_numbers, args.dry_run, args.force))
+        return
+
+    if args.command == "clean":
+        _setup_logging(args.log_level)
+        asyncio.run(_clean(Path(args.workflow), args.dry_run, args.all_workspaces, args.yes))
         return
 
     console = Console()
