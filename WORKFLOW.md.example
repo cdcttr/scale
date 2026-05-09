@@ -1,72 +1,75 @@
 ---
 tracker:
   kind: github
-  repo: your-org/your-repo
+  repo: your-org/your-repo        # GitHub repo to poll
   api_token: $GITHUB_TOKEN
-
-  active_labels: []
+  active_labels:
+    - scale:ready                  # issues Scale will pick up
   skip_labels:
-    - symphony:skip
-    - wontfix
+    - scale:skip
+    - scale:concept
+    - scale:planned
   terminal_labels:
-    - symphony:done
+    - scale:done
 
 polling:
-  interval_ms: 30000
+  interval_ms: 60000               # how often to poll for new issues
 
 workspace:
-  root: ./workspaces
+  root: ./workspaces               # where agent workspaces are created
+  # log_archive: ./logs            # uncomment to preserve agent logs after cleanup
 
 hooks:
-  after_create: "git clone https://github.com/your-org/your-repo ."
-  before_run: "git fetch origin && git checkout -B scale/{{ issue.number }} origin/main"
-  after_run: ""
-  before_remove: ""
-  timeout_ms: 60000
+  after_create: |
+    git clone https://x-access-token:${GITHUB_TOKEN}@github.com/your-org/your-repo.git . && <install deps>
+  before_run: |
+    git fetch origin main && git checkout main && git reset --hard origin/main
+  timeout_ms: 120000
 
 agent:
-  max_concurrent_agents: 5
+  max_concurrent_agents: 2
   max_turns: 20
-  max_retry_backoff_ms: 300000
 
-codex:
-  command: claude
-  approval_policy: auto
-  stall_timeout_ms: 300000
-  turn_timeout_ms: 3600000
+# Uncomment to enable automated triage (pre-screens issues before dispatch):
+# triage:
+#   model: claude-haiku-4-5-20251001
+#   triage_label: scale:triage
+#   triaged_label: scale:triaged
+#   ready_label: scale:ready
+#   needs_detail_label: scale:needs-detail
+#   needs_approval_label: scale:needs-approval
 
-# server:
-#   port: 8080
+# Uncomment to enable issue decomposition planner:
+# planner:
+#   model: claude-sonnet-4-6
+#   plan_label: scale:plan
+#   leaf_label: scale:leaf
+#   concept_label: scale:concept
+#   planned_label: scale:planned
 
-# worker:
-#   ssh_hosts:
-#     - user@host1.example.com
-#   max_concurrent_agents_per_host: 3
+# Uncomment to enable automated PR review after agent completes:
+# review:
+#   pr_open_label: scale:pr-open
+#   needs_revision_label: scale:needs-revision
+#   conflict_label: scale:conflict
 ---
 
-You are working on GitHub issue {{ issue.identifier }}: **{{ issue.title }}**.
+You are an autonomous coding agent implementing GitHub issue #{{ issue.number }}: **{{ issue.title }}**.
 
 ## Task
 
 {{ issue.description }}
 
-## Context
-
-- Branch: `{{ issue.branch_name }}`
-- Labels: {{ issue.labels | join: ", " }}
-- Issue URL: {{ issue.url }}
-{% if attempt %}
-
-## Retry context
-
-This is attempt **{{ attempt }}**. Review any work already present in this
-workspace and continue from where it left off. Do not repeat completed steps.
-{% endif %}
-
 ## Instructions
 
-1. Read the task description carefully before writing any code.
-2. Implement the required changes in this repository.
-3. Write or update tests to cover your changes.
-4. Make sure all existing tests still pass.
-5. Open a pull request against `main` when the work is complete.
+- Read the issue completely before writing any code.
+- Follow the conventions and patterns already present in this repository.
+- Write or update tests to cover your changes.
+- Ensure all existing tests still pass.
+- Open a pull request targeting `main` when the work is complete.
+{% if attempt > 1 %}
+
+## Retry
+
+This is attempt **{{ attempt }}**. Review any existing work in this workspace and continue from where it left off.
+{% endif %}
