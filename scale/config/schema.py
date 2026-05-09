@@ -71,6 +71,15 @@ class PlannerConfig(BaseModel):
     planner_workspace: str = "./workspaces/_planner"
 
 
+class ReviewConfig(BaseModel):
+    model: str = "claude-haiku-4-5-20251001"
+    timeout_ms: int = 120000
+    pr_open_label: str = "symphony:pr-open"
+    needs_revision_label: str = "symphony:needs-revision"
+    conflict_label: str = "symphony:conflict"
+    template: str = ""
+
+
 class WorkflowConfig(BaseModel):
     tracker: TrackerConfig
     polling: PollingConfig = Field(default_factory=PollingConfig)
@@ -82,4 +91,5 @@ class WorkflowConfig(BaseModel):
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     triage: Optional[TriageConfig] = None
     planner: Optional[PlannerConfig] = None
+    review: Optional[ReviewConfig] = None
     prompt_template: str = ""
