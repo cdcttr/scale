@@ -180,3 +180,29 @@ async def test_run_processes_multiple_issues():
         await runner.run(issues)
 
     assert gh.post_comment.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_triage_issue_needs_approval_posts_and_labels():
+    issue = _issue()
+    gh = AsyncMock()
+    gh.fetch_issue_comments.return_value = []
+
+    runner = TriageRunner(_config(), CodexConfig(), gh)
+    assessment = TriageAssessment(
+        ready=False,
+        needs_approval=True,
+        summary="Well-specified but risky.",
+        reasons=["Touches core orchestration"],
+        comment="## Symphony Triage\n\n**Status: Needs Approval ⚠️**",
+    )
+    with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
+        await runner.triage_issue(issue)
+
+    gh.post_comment.assert_called_once()
+    labels_added = gh.add_labels.call_args[0][1]
+    assert "scale:needs-approval" in labels_added
+    assert "scale:triaged" in labels_added
+    removed_calls = [call[0][1] for call in gh.remove_label.call_args_list]
+    assert "scale:ready" in removed_calls
+    assert "scale:needs-detail" in removed_calls

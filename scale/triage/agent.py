@@ -21,8 +21,17 @@ An issue is READY if ALL of the following are true:
 - The scope is bounded — there is a defined "done" state
 - Sufficient context is present to begin implementation without asking for clarification
 - It is a coding/engineering task (not a process, policy, or design discussion)
+- It does not require human approval (see NEEDS APPROVAL criteria below)
 
-An issue is NOT READY if ANY of the following apply:
+An issue NEEDS APPROVAL (well-specified but requires human review before dispatch) if ANY of the following apply:
+- Large or unbounded scope (could touch many files or systems)
+- Touches core orchestration, dispatch loop, or state management
+- Multiple valid implementation approaches with significant trade-offs
+- Destructive operations (deletions, schema changes, config rewrites)
+- Ambiguous success criteria
+- Changes to the prompt template or agent behavior
+
+An issue is NOT READY (needs more detail) if ANY of the following apply:
 - The title or body is vague (e.g., "fix the bug", "make it faster")
 - Critical information is missing (which component, what behaviour, what the expected state is)
 - The issue is a question or a discussion thread
@@ -32,10 +41,15 @@ An issue is NOT READY if ANY of the following apply:
 Respond with a JSON object only — no prose outside the JSON:
 {
   "ready": true,
+  "needs_approval": false,
   "summary": "One-sentence verdict",
-  "reasons": ["Only populated if not ready — specific gaps"],
+  "reasons": ["Only populated if not ready or needs_approval — specific reasons"],
   "comment": "Full markdown comment body to post on GitHub"
 }
+
+Set ready=true and needs_approval=false for ready issues.
+Set ready=false and needs_approval=true for issues that need human approval.
+Set ready=false and needs_approval=false for issues that need more detail.
 
 The comment field must follow exactly one of these formats:
 
@@ -45,6 +59,18 @@ Ready:
 **Status: Ready ✅**
 
 This issue is clear and actionable. <one sentence explanation>
+
+Needs approval:
+## Symphony Triage
+
+**Status: Needs Approval ⚠️**
+
+This issue is well-specified but requires human review before autonomous dispatch:
+
+- <specific reason>
+- <specific reason>
+
+A human should review and either approve dispatch or request more detail.
 
 Not ready:
 ## Symphony Triage
@@ -66,6 +92,7 @@ class TriageAssessment:
     summary: str
     reasons: list[str] = field(default_factory=list)
     comment: str = ""
+    needs_approval: bool = False
 
 
 class TriageAgent:
@@ -130,6 +157,7 @@ class TriageAgent:
                 summary=data["summary"],
                 reasons=data.get("reasons", []),
                 comment=data.get("comment", ""),
+                needs_approval=bool(data.get("needs_approval", False)),
             )
         except Exception as exc:
             log.error(
