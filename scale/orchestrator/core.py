@@ -118,7 +118,8 @@ class Orchestrator:
         await self._fire_retries()
         if self._config.triage and self._triage_runner:
             try:
-                triage_labels = {
+                triage_label = self._config.triage.triage_label
+                triage_exclusion = {
                     self._config.triage.triaged_label,
                     self._config.triage.ready_label,
                     self._config.triage.needs_detail_label,
@@ -130,9 +131,9 @@ class Orchestrator:
                     for issue in all_open:
                         if issue.id in self._state.claimed:
                             continue
-                        if not issue.labels:
+                        if triage_label not in issue.labels:
                             continue
-                        if any(label in triage_labels for label in issue.labels):
+                        if any(label in triage_exclusion for label in issue.labels):
                             continue
                         self._state.claimed.add(issue.id)
                         asyncio.create_task(self._run_triage(issue))

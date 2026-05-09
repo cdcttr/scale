@@ -565,24 +565,25 @@ def _config_with_triage(**kwargs) -> WorkflowConfig:
     )
 
 
-def _untriaged_issue(number=20) -> Issue:
+def _untriaged_issue(number=20, labels: list[str] | None = None) -> Issue:
     return Issue(
         id=f"ut{number}", identifier=f"o/r#{number}", number=number,
         title="Untriaged feature", description="", state="active",
-        labels=[], branch_name=f"symphony/{number}-untriaged-feature",
+        labels=labels if labels is not None else [],
+        branch_name=f"symphony/{number}-untriaged-feature",
         url="https://example.com", priority=None,
         created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1),
     )
 
 
 @pytest.mark.asyncio
-async def test_tick_dispatches_untriaged_issues_to_triage_runner():
+async def test_tick_dispatches_issues_with_triage_label_to_triage_runner():
     tracker = AsyncMock()
     tracker.fetch_terminal_issues.return_value = []
     tracker.fetch_candidate_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
 
-    issue = _untriaged_issue()
+    issue = _untriaged_issue(labels=["scale:triage"])
 
     with patch("scale.orchestrator.core.TriageRunner"):
         orch = Orchestrator(_config_with_triage(), tracker)
@@ -594,6 +595,27 @@ async def test_tick_dispatches_untriaged_issues_to_triage_runner():
 
     mock_run_triage.assert_called_once()
     assert mock_run_triage.call_args[0][0].number == 20
+
+
+@pytest.mark.asyncio
+async def test_tick_ignores_issues_without_triage_label():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    unlabeled = _untriaged_issue(number=20, labels=[])
+    other_label = _untriaged_issue(number=21, labels=["bug"])
+
+    with patch("scale.orchestrator.core.TriageRunner"):
+        orch = Orchestrator(_config_with_triage(), tracker)
+        orch._github = AsyncMock()
+        orch._github.fetch_open_issues.return_value = [unlabeled, other_label]
+        with patch.object(orch, "_run_triage", AsyncMock()) as mock_run_triage:
+            await orch._tick()
+            await asyncio.sleep(0)
+
+    mock_run_triage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -610,20 +632,15 @@ async def test_tick_skips_triage_when_not_configured():
 
 
 @pytest.mark.asyncio
-async def test_tick_skips_issues_that_have_triage_labels():
+async def test_tick_skips_issues_that_have_triage_exclusion_labels():
     tracker = AsyncMock()
     tracker.fetch_terminal_issues.return_value = []
     tracker.fetch_candidate_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
 
-    triaged_issue = _untriaged_issue()
-    triaged_issue.labels = ["scale:triaged"]
-
-    ready_issue = _untriaged_issue(number=21)
-    ready_issue.labels = ["scale:ready"]
-
-    needs_detail_issue = _untriaged_issue(number=22)
-    needs_detail_issue.labels = ["scale:needs-detail"]
+    triaged_issue = _untriaged_issue(number=20, labels=["scale:triage", "scale:triaged"])
+    ready_issue = _untriaged_issue(number=21, labels=["scale:triage", "scale:ready"])
+    needs_detail_issue = _untriaged_issue(number=22, labels=["scale:triage", "scale:needs-detail"])
 
     with patch("scale.orchestrator.core.TriageRunner"):
         orch = Orchestrator(_config_with_triage(), tracker)
@@ -645,7 +662,7 @@ async def test_tick_does_not_retriage_claimed_issues():
     tracker.fetch_candidate_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
 
-    issue = _untriaged_issue()
+    issue = _untriaged_issue(labels=["scale:triage"])
 
     with patch("scale.orchestrator.core.TriageRunner"):
         orch = Orchestrator(_config_with_triage(), tracker)
