@@ -72,8 +72,9 @@ agent:
 #   model: claude-sonnet-4-6
 
 # review:                          # optional: post-run PR review phase
-#   model: claude-haiku-4-5-20251001
-#   timeout_ms: 120000
+#   pr_open_label: scale:pr-open
+#   needs_revision_label: scale:needs-revision
+#   conflict_label: scale:conflict
 ```
 
 The body of `WORKFLOW.md` (below the frontmatter) is a [Liquid](https://shopify.github.io/liquid/) template rendered as the agent's prompt. Variables available: `{{ issue.number }}`, `{{ issue.title }}`, `{{ issue.description }}`, `{{ issue.url }}`, `{{ issue.labels }}`, `{{ attempt }}`.
@@ -184,13 +185,14 @@ It contains the full rendered prompt, every streaming event from Claude as JSON,
 **Per-issue stats** — Scale appends a JSON record to `stats.jsonl` in the project root after each issue completes:
 
 ```jsonl
-{"issue": 42, "turns": 8, "tokens": 12400, "duration_s": 94.2, "outcome": "done"}
+{"issue": 42, "turns": 8, "input_tokens": 9400, "output_tokens": 3000, "duration_s": 94, "attempt": 1, "success": true, "timestamp": "2026-05-09T22:00:00Z", "issue_title": "Fix the thing"}
 ```
 
-**Log analysis** — `scripts/analyze_agent_logs.py` parses archived logs and prints a summary table:
+**Log analysis** — `scripts/analyze_agent_logs.py` reads `stats.jsonl` and prints a summary table:
 
 ```bash
-python scripts/analyze_agent_logs.py ./logs
+python scripts/analyze_agent_logs.py
+python scripts/analyze_agent_logs.py path/to/stats.jsonl
 ```
 
 **Tick summaries** — the dispatch loop logs a one-line summary every poll cycle showing active agents, queue depth, and recent completions.
