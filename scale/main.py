@@ -22,6 +22,7 @@ def _setup_logging(level: str, console: Console | None = None) -> None:
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
             stream=sys.stderr,
         )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 async def _run(workflow_path: Path, port: int | None, console: Console | None = None) -> None:

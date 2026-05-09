@@ -1,4 +1,6 @@
+from __future__ import annotations
 import asyncio
+import logging
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -911,3 +913,52 @@ async def test_expire_completed_keeps_recent_entries():
 
     assert len(orch._state.completed) == 1
     assert orch._state.completed[0] is recent_cs
+
+
+@pytest.mark.asyncio
+async def test_tick_emits_summary_log(caplog):
+    tracker = AsyncMock()
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+
+    with caplog.at_level(logging.INFO, logger="scale.orchestrator.core"):
+        await orch._tick()
+
+    tick_lines = [r.message for r in caplog.records if r.message.startswith("tick:")]
+    assert len(tick_lines) == 1
+    assert "running=" in tick_lines[0]
+    assert "retries=" in tick_lines[0]
+    assert "completed=" in tick_lines[0]
+
+
+@pytest.mark.asyncio
+async def test_tick_summary_counts_are_accurate(caplog):
+    tracker = AsyncMock()
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.retry_queue.append(
+        RetryEntry(
+            issue=_issue("i2", 2),
+            attempt=1,
+            due_at=datetime.now(tz=timezone.utc),
+            error="test",
+        )
+    )
+    orch._state.total_completed = 3
+
+    with caplog.at_level(logging.INFO, logger="scale.orchestrator.core"):
+        await orch._tick()
+
+    tick_lines = [r.message for r in caplog.records if r.message.startswith("tick:")]
+    assert len(tick_lines) >= 1
+    last = tick_lines[-1]
+    assert "completed=3" in last
