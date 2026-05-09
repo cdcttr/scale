@@ -15,6 +15,8 @@ def is_eligible(
         return False
     if issue.id in state.claimed or issue.id in state.running:
         return False
+    if config.agent.supervised_label in (issue.labels or []):
+        return False
     if len(state.running) >= config.agent.max_concurrent_agents:
         return False
     per_state = config.agent.max_concurrent_agents_by_state
