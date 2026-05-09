@@ -112,6 +112,12 @@ class Orchestrator:
             ]
 
     async def _tick(self) -> None:
+        logger.info(
+            "tick: running=%d retries=%d completed=%d",
+            len(self._state.running),
+            len(self._state.retry_queue),
+            self._state.total_completed,
+        )
         await self._flush_finishing()
         await self._expire_completed()
         await self._reconcile()
