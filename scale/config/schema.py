@@ -56,6 +56,7 @@ class WorkerConfig(BaseModel):
 
 class TriageConfig(BaseModel):
     model: str = "claude-haiku-4-5-20251001"
+    triage_label: str = "scale:triage"
     ready_label: str = "scale:ready"
     needs_detail_label: str = "scale:needs-detail"
     needs_approval_label: str = "scale:needs-approval"
