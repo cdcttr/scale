@@ -8,10 +8,10 @@ Inspired by [OpenAI's Symphony](https://github.com/openai/openai-symphony), reim
 
 ## How it works
 
-1. You label a GitHub issue `symphony:ready`
+1. You label a GitHub issue `scale:ready`
 2. Scale picks it up, clones the repo into an isolated workspace, and runs `claude` with your prompt template rendered against the issue
 3. The agent reads the issue, implements the change, opens a PR
-4. Scale adds `symphony:done` and moves to the next issue
+4. Scale adds `scale:done` and moves to the next issue
 
 Failures retry with exponential backoff. Concurrency is bounded by `max_concurrent_agents`. A live TUI dashboard shows what's running.
 
@@ -22,8 +22,8 @@ Failures retry with exponential backoff. Concurrency is bounded by `max_concurre
 Requires Python 3.12+ and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) on PATH.
 
 ```bash
-git clone https://github.com/cdcttr/openai-symphony
-cd openai-symphony
+git clone https://github.com/cdcttr/scale
+cd scale
 uv sync
 ```
 
@@ -39,15 +39,20 @@ tracker:
   repo: your-org/your-repo
   api_token: $GITHUB_TOKEN
   active_labels:
-    - symphony:ready
+    - scale:ready
+  skip_labels:
+    - scale:skip
+    - scale:concept
+    - scale:planned
   terminal_labels:
-    - symphony:done
+    - scale:done
 
 polling:
   interval_ms: 60000
 
 workspace:
   root: ./workspaces
+  # log_archive: ./logs   # optional: copy agent.log here before workspace cleanup
 
 hooks:
   after_create: |
@@ -59,6 +64,17 @@ hooks:
 agent:
   max_concurrent_agents: 2
   max_turns: 20
+
+# triage:                          # optional: enable automated triage assessment
+#   model: claude-haiku-4-5-20251001
+
+# planner:                         # optional: enable issue decomposition
+#   model: claude-sonnet-4-6
+
+# review:                          # optional: post-run PR review phase
+#   pr_open_label: scale:pr-open
+#   needs_revision_label: scale:needs-revision
+#   conflict_label: scale:conflict
 ```
 
 The body of `WORKFLOW.md` (below the frontmatter) is a [Liquid](https://shopify.github.io/liquid/) template rendered as the agent's prompt. Variables available: `{{ issue.number }}`, `{{ issue.title }}`, `{{ issue.description }}`, `{{ issue.url }}`, `{{ issue.labels }}`, `{{ attempt }}`.
@@ -87,7 +103,7 @@ scale triage WORKFLOW.md          # all open issues
 scale triage WORKFLOW.md --dry-run
 ```
 
-Triage labels issues `symphony:ready` or `symphony:needs-detail` and posts a comment explaining the verdict. Issues are re-triaged automatically when updated.
+Triage reads each issue and labels it `scale:ready`, `scale:needs-detail`, or `scale:needs-approval`, and posts a comment explaining the verdict. Requires a `triage:` section in `WORKFLOW.md`. Issues labeled `scale:triage` are automatically triaged on each poll cycle.
 
 **Decompose high-level issues into leaf tasks** (uses Claude Sonnet):
 
@@ -96,18 +112,29 @@ scale plan WORKFLOW.md --issue 7
 scale plan WORKFLOW.md --issue 7 --dry-run
 ```
 
-Requires a `planner:` section in WORKFLOW.md. Label a parent issue `symphony:plan` and the planner will either classify it as directly implementable (`symphony:leaf`) or break it into child issues (`symphony:planned`).
+Requires a `planner:` section in WORKFLOW.md. Label a parent issue `scale:plan` and the planner will either classify it as directly implementable (`scale:leaf`) or break it into child issues (`scale:planned`).
+
+**Remove stale workspace directories:**
+
+```bash
+scale clean WORKFLOW.md
+scale clean WORKFLOW.md --dry-run
+scale clean WORKFLOW.md --all --yes
+```
 
 ---
 
 ## Commands
 
 ```
-scale run WORKFLOW.md [--port N] [--log-level DEBUG|INFO|WARNING|ERROR]
-scale triage WORKFLOW.md [--issue N[,N,...]] [--all] [--model MODEL] [--dry-run]
-scale plan WORKFLOW.md --issue N[,N,...] [--force] [--dry-run]
+scale run    [WORKFLOW.md] [--port N] [--log-level DEBUG|INFO|WARNING|ERROR]
+scale triage [WORKFLOW.md] [--issue N[,N,...]] [--all] [--model MODEL] [--dry-run]
+scale plan   [WORKFLOW.md] --issue N[,N,...] [--force] [--dry-run]
+scale clean  [WORKFLOW.md] [--dry-run] [--all] [--yes]
 scale version
 ```
+
+All subcommands default to `WORKFLOW.md` in the current directory if no path is given.
 
 ---
 
@@ -115,15 +142,18 @@ scale version
 
 | Label | Meaning |
 |---|---|
-| `symphony:ready` | Issue is ready for dispatch |
-| `symphony:triaged` | Triage has run at least once |
-| `symphony:needs-detail` | Triage found the issue underspecified |
-| `symphony:plan` | Issue should be decomposed before dispatch |
-| `symphony:leaf` | Planner classified as directly implementable |
-| `symphony:concept` | Planner classified as needing decomposition |
-| `symphony:planned` | Children created; parent waiting for them to finish |
-| `symphony:done` | Terminal — agent completed, workspace removed |
-| `symphony:skip` | Ignored by Scale |
+| `scale:triage` | Opt in to automated triage assessment on next poll |
+| `scale:triaged` | Triage has run at least once |
+| `scale:ready` | Issue is ready for dispatch |
+| `scale:needs-detail` | Triage found the issue underspecified |
+| `scale:needs-approval` | Well-specified but needs human sign-off before dispatch |
+| `scale:supervised` | Blocks dispatch even if `scale:ready`; requires human to remove |
+| `scale:plan` | Issue should be decomposed before dispatch |
+| `scale:leaf` | Planner: directly implementable without decomposition |
+| `scale:concept` | Planner: decomposed into child issues |
+| `scale:planned` | Children created; parent waiting for them to finish |
+| `scale:done` | Terminal — agent completed, workspace removed |
+| `scale:skip` | Ignored by Scale entirely |
 
 ---
 
@@ -142,15 +172,30 @@ Hooks inherit the parent process environment, so `$GITHUB_TOKEN` and other varia
 
 ---
 
-## Debugging
+## Observability
 
-Each workspace gets an `agent.log` file written during the run:
+**Agent logs** — each workspace gets an `agent.log` written during the run:
 
 ```
 workspaces/<workspace-name>/agent.log
 ```
 
-It contains the full rendered prompt, every streaming event from Claude as JSON, and the result + stderr for each turn. Check it when an agent fails.
+It contains the full rendered prompt, every streaming event from Claude as JSON, and the result and stderr for each turn. If `workspace.log_archive` is set in `WORKFLOW.md`, Scale copies the log here before removing the workspace so it survives cleanup.
+
+**Per-issue stats** — Scale appends a JSON record to `stats.jsonl` in the project root after each issue completes:
+
+```jsonl
+{"issue": 42, "turns": 8, "input_tokens": 9400, "output_tokens": 3000, "duration_s": 94, "attempt": 1, "success": true, "timestamp": "2026-05-09T22:00:00Z", "issue_title": "Fix the thing"}
+```
+
+**Log analysis** — `scripts/analyze_agent_logs.py` reads `stats.jsonl` and prints a summary table:
+
+```bash
+python scripts/analyze_agent_logs.py
+python scripts/analyze_agent_logs.py path/to/stats.jsonl
+```
+
+**Tick summaries** — the dispatch loop logs a one-line summary every poll cycle showing active agents, queue depth, and recent completions.
 
 ---
 
@@ -169,8 +214,6 @@ scale run WORKFLOW.md
 ## Architecture
 
 Single Python asyncio process. The `Orchestrator` owns in-memory state and drives the poll-and-dispatch loop. Every agent runs as a `claude` CLI subprocess in an isolated workspace directory. The prompt template is rendered per issue using Liquid. The HTTP API (optional) and Rich TUI dashboard share the same orchestrator state object.
-
-See `docs/IMPLEMENTATION.md` for a detailed walkthrough.
 
 ---
 
