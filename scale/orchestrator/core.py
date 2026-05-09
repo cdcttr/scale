@@ -116,6 +116,12 @@ class Orchestrator:
         await self._expire_completed()
         await self._reconcile()
         await self._fire_retries()
+        running_count = len(self._state.running)
+        retry_count = len(self._state.retry_queue)
+        logger.info(
+            "tick: running=%d retries=%d completed=%d",
+            running_count, retry_count, self._state.total_completed,
+        )
         if self._config.triage and self._triage_runner:
             try:
                 triage_label = self._config.triage.triage_label
