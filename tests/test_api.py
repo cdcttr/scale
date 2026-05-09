@@ -7,6 +7,9 @@ from symphony.api.server import create_app
 from symphony.orchestrator.state import OrchestratorState, LiveSession, TokenTotals
 from symphony.tracker.models import Issue
 
+_TOKEN = "test-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
+
 
 def _issue(number=42) -> Issue:
     return Issue(
@@ -33,9 +36,9 @@ def _make_task():
 
 def test_state_endpoint_empty():
     orch = _orch_with_state(OrchestratorState())
-    app = create_app(orch)
+    app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
-        r = client.get("/api/v1/state")
+        r = client.get("/api/v1/state", headers=_AUTH)
     assert r.status_code == 200
     data = r.json()
     assert data["running"] == []
@@ -48,9 +51,9 @@ def test_state_endpoint_with_running_session():
     session = LiveSession(issue=_issue(), task=MagicMock())
     state.running["n42"] = session
     orch = _orch_with_state(state)
-    app = create_app(orch)
+    app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
-        r = client.get("/api/v1/state")
+        r = client.get("/api/v1/state", headers=_AUTH)
     assert r.status_code == 200
     running = r.json()["running"]
     assert len(running) == 1
@@ -59,9 +62,9 @@ def test_state_endpoint_with_running_session():
 
 def test_refresh_endpoint():
     orch = _orch_with_state(OrchestratorState())
-    app = create_app(orch)
+    app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
-        r = client.post("/api/v1/refresh")
+        r = client.post("/api/v1/refresh", headers=_AUTH)
     assert r.status_code == 200
     orch.request_refresh.assert_called_once()
 
@@ -71,16 +74,56 @@ def test_issue_detail_endpoint():
     session = LiveSession(issue=_issue(42), task=MagicMock())
     state.running["n42"] = session
     orch = _orch_with_state(state)
-    app = create_app(orch)
+    app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
-        r = client.get("/api/v1/o-r-42")
+        r = client.get("/api/v1/o-r-42", headers=_AUTH)
     assert r.status_code == 200
     assert r.json()["issue_identifier"] == "o/r#42"
 
 
 def test_issue_detail_not_found():
     orch = _orch_with_state(OrchestratorState())
-    app = create_app(orch)
+    app = create_app(orch, api_token=_TOKEN)
     with TestClient(app) as client:
-        r = client.get("/api/v1/nonexistent-99")
+        r = client.get("/api/v1/nonexistent-99", headers=_AUTH)
     assert r.status_code == 404
+
+
+def test_state_endpoint_requires_auth_when_token_configured():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state")
+    assert r.status_code == 401
+
+
+def test_state_endpoint_wrong_token_rejected():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_state_endpoint_valid_token_allowed():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state", headers=_AUTH)
+    assert r.status_code == 200
+
+
+def test_refresh_endpoint_requires_auth_when_token_configured():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=_TOKEN)
+    with TestClient(app) as client:
+        r = client.post("/api/v1/refresh")
+    assert r.status_code == 401
+
+
+def test_no_auth_required_when_token_not_configured():
+    orch = _orch_with_state(OrchestratorState())
+    app = create_app(orch, api_token=None)
+    with TestClient(app) as client:
+        r = client.get("/api/v1/state")
+    assert r.status_code == 200

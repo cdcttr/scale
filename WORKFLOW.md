@@ -34,6 +34,10 @@ triage:
 
 planner:
   model: claude-sonnet-4-6
+
+# server:
+#   port: 8080
+#   api_token: $SYMPHONY_API_TOKEN
 ---
 You are implementing a GitHub issue on the Symphony project.
 
