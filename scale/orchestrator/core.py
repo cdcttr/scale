@@ -16,6 +16,7 @@ from scale.worker.local import LocalWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
 from scale.planner.runner import PlannerRunner
+from scale.triage.runner import TriageRunner
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class Orchestrator:
         self._planner_runner = None
         if config.planner:
             self._planner_runner = PlannerRunner(config.planner, config.codex, self._github)
+        self._triage_runner = None
+        if config.triage:
+            self._triage_runner = TriageRunner(config.triage, config.codex, self._github)
 
     def _has_slot(self, issue: Issue) -> bool:
         """Check concurrency limits only — not claimed/running status."""
@@ -100,7 +104,26 @@ class Orchestrator:
     async def _tick(self) -> None:
         await self._reconcile()
         await self._fire_retries()
-        # Dispatch plan-labeled issues to the planner
+        if self._config.triage and self._triage_runner:
+            try:
+                triage_labels = {
+                    self._config.triage.triaged_label,
+                    self._config.triage.ready_label,
+                    self._config.triage.needs_detail_label,
+                    *self._config.tracker.skip_labels,
+                    *self._config.tracker.terminal_labels,
+                }
+                all_open = await self._github.fetch_open_issues()
+                async with self._lock:
+                    for issue in all_open:
+                        if issue.id in self._state.claimed:
+                            continue
+                        if any(label in triage_labels for label in issue.labels):
+                            continue
+                        self._state.claimed.add(issue.id)
+                        asyncio.create_task(self._run_triage(issue))
+            except Exception as e:
+                logger.warning("Triage issue fetch failed: %s", e)
         if self._config.planner and self._planner_runner:
             try:
                 plan_issues = await self._tracker.fetch_issues_by_label(
@@ -267,6 +290,15 @@ class Orchestrator:
             await self._planner_runner.plan_issue(issue)
         except Exception as e:
             logger.error("Planner failed for issue #%d: %s", issue.number, e)
+        finally:
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
+
+    async def _run_triage(self, issue: Issue) -> None:
+        try:
+            await self._triage_runner.triage_issue(issue)
+        except Exception as e:
+            logger.error("Triage failed for issue #%d: %s", issue.number, e)
         finally:
             async with self._lock:
                 self._state.claimed.discard(issue.id)
