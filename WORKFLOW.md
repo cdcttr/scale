@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: github
-  repo: cdcttr/openai-symphony
+  repo: cdcttr/scale
   api_token: $GITHUB_TOKEN
   active_labels:
     - symphony:ready
@@ -20,7 +20,7 @@ workspace:
 
 hooks:
   after_create: |
-    git clone https://x-access-token:${GITHUB_TOKEN}@github.com/cdcttr/openai-symphony.git . && uv sync
+    git clone https://x-access-token:${GITHUB_TOKEN}@github.com/cdcttr/scale.git . && uv sync
   before_run: |
     git fetch origin main && git checkout main && git reset --hard origin/main
   timeout_ms: 120000
