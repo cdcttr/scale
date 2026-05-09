@@ -295,10 +295,12 @@ class Orchestrator:
                     usage = (event.get("message") or {}).get("usage") or {}
                     session.tokens.input_tokens += (
                         usage.get("input_tokens", 0)
-                        + usage.get("cache_creation_input_tokens", 0)
                         + usage.get("cache_read_input_tokens", 0)
                     )
-                    session.tokens.output_tokens += usage.get("output_tokens", 0)
+                    session.tokens.output_tokens += (
+                        usage.get("output_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                    )
 
         try:
             worker = self._make_worker()

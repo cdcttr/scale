@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +13,7 @@ from scale.tracker.models import Issue
 log = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a triage agent for an autonomous coding system called Symphony.
+You are a triage agent for an autonomous coding system called Scale.
 Your job is to assess whether a GitHub issue is ready to be implemented autonomously.
 
 An issue is READY if ALL of the following are true:
@@ -116,8 +117,13 @@ class TriageAgent:
             return None
         try:
             text = result.message.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+            if m:
+                text = m.group(1).strip()
+            else:
+                start, end = text.find("{"), text.rfind("}")
+                if start != -1 and end != -1:
+                    text = text[start:end + 1]
             data = json.loads(text)
             return TriageAssessment(
                 ready=bool(data["ready"]),

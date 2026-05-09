@@ -7,6 +7,7 @@ tracker:
     - symphony:ready
   skip_labels:
     - symphony:skip
+    - scale:skip
     - symphony:concept
     - symphony:planned
   terminal_labels:
