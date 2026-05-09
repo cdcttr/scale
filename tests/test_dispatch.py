@@ -71,3 +71,31 @@ def test_retry_delay_second_failure():
 
 def test_retry_delay_capped():
     assert retry_delay_ms(attempt=100, max_ms=300_000) == 300_000
+
+def test_ineligible_when_supervised():
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5)
+    issue = _issue()
+    issue.labels = ["scale:supervised"]
+    assert is_eligible(issue, state, cfg) is False
+
+def test_eligible_without_supervised_label():
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5)
+    issue = _issue()
+    issue.labels = ["scale:ready"]
+    assert is_eligible(issue, state, cfg) is True
+
+def test_supervised_label_configurable():
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5, supervised_label="custom:supervised")
+    issue = _issue()
+    issue.labels = ["custom:supervised"]
+    assert is_eligible(issue, state, cfg) is False
+
+def test_supervised_label_not_blocked_by_other_label():
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5, supervised_label="custom:supervised")
+    issue = _issue()
+    issue.labels = ["scale:ready"]
+    assert is_eligible(issue, state, cfg) is True
