@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from scale.orchestrator.core import Orchestrator
-from scale.orchestrator.state import LiveSession, RetryEntry
+from scale.orchestrator.state import CompletedSession, LiveSession, RetryEntry, TokenTotals
 from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig, TriageConfig
 from scale.tracker.models import Issue
 from scale.worker.local import LocalWorker
@@ -653,3 +653,101 @@ async def test_tick_triage_fetch_failure_does_not_crash():
         orch._github = AsyncMock()
         orch._github.fetch_open_issues.side_effect = RuntimeError("network down")
         await orch._tick()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# CompletedSession
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_completed_session_appended_on_success():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert len(orch._state.completed) == 1
+    cs = orch._state.completed[0]
+    assert isinstance(cs, CompletedSession)
+    assert cs.issue.id == issue.id
+    assert cs.tokens.input_tokens == 100
+    assert cs.tokens.output_tokens == 50
+    assert cs.turn_count == 1
+
+
+@pytest.mark.asyncio
+async def test_total_completed_incremented_on_success():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        pass
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert orch._state.total_completed == 1
+
+
+@pytest.mark.asyncio
+async def test_expire_completed_removes_old_entries():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(completed_display_s=300), tracker)
+
+    old_cs = CompletedSession(
+        issue=_issue(),
+        turn_count=1,
+        tokens=TokenTotals(input_tokens=10, output_tokens=5),
+        completed_at=datetime.now(tz=timezone.utc) - timedelta(seconds=400),
+    )
+    orch._state.completed.append(old_cs)
+
+    await orch._expire_completed()
+
+    assert len(orch._state.completed) == 0
+
+
+@pytest.mark.asyncio
+async def test_expire_completed_keeps_recent_entries():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(completed_display_s=300), tracker)
+
+    recent_cs = CompletedSession(
+        issue=_issue(),
+        turn_count=2,
+        tokens=TokenTotals(input_tokens=20, output_tokens=10),
+        completed_at=datetime.now(tz=timezone.utc) - timedelta(seconds=60),
+    )
+    orch._state.completed.append(recent_cs)
+
+    await orch._expire_completed()
+
+    assert len(orch._state.completed) == 1
+    assert orch._state.completed[0] is recent_cs

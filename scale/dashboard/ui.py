@@ -23,6 +23,17 @@ def _elapsed(dt: datetime) -> str:
     return f"{m}m {sec:02d}s"
 
 
+def _ago(dt: datetime) -> str:
+    delta = datetime.now(tz=timezone.utc) - dt.replace(tzinfo=timezone.utc)
+    s = int(delta.total_seconds())
+    if s < 60:
+        return f"{s}s ago"
+    m = s // 60
+    if m < 60:
+        return f"{m}m ago"
+    return f"{m // 60}h ago"
+
+
 def _fmt_tokens(n: int) -> str:
     if n >= 1000:
         return f"{n/1000:.1f}k"
@@ -81,11 +92,31 @@ def _build_table(orch: "Orchestrator") -> Table:
                 entry.error[:30] if entry.error else "",
             )
 
+    if state.completed:
+        table.add_row("", "", "", "", "", "")
+        table.add_row(Text("RECENTLY COMPLETED", style="bold underline"), "", "", "", "", "")
+        for cs in reversed(state.completed):
+            age_s = int(
+                (datetime.now(tz=timezone.utc) - cs.completed_at.replace(tzinfo=timezone.utc))
+                .total_seconds()
+            )
+            row_style = "dim" if age_s >= 60 else None
+            turns_label = f"{cs.turn_count} turn{'s' if cs.turn_count != 1 else ''}"
+            table.add_row(
+                f"  #{cs.issue.number}",
+                cs.issue.title[:40],
+                turns_label,
+                f"{_fmt_tokens(cs.tokens.total)} tokens",
+                "",
+                f"completed {_ago(cs.completed_at)}",
+                style=row_style,
+            )
+
     table.add_row("", "", "", "", "", "")
     table.add_row(
         Text(
             f"TOTALS  {_fmt_tokens(state.token_totals.total)} tokens  •  "
-            f"{len(state.completed)} completed",
+            f"{state.total_completed} completed",
             style="dim",
         ),
         "", "", "", "", "",

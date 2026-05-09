@@ -36,9 +36,18 @@ class RetryEntry:
 
 
 @dataclass
+class CompletedSession:
+    issue: Issue
+    turn_count: int
+    tokens: TokenTotals
+    completed_at: datetime
+
+
+@dataclass
 class OrchestratorState:
     running: dict[str, LiveSession] = field(default_factory=dict)
     claimed: set[str] = field(default_factory=set)
     retry_queue: list[RetryEntry] = field(default_factory=list)
-    completed: set[str] = field(default_factory=set)
+    completed: list[CompletedSession] = field(default_factory=list)
     token_totals: TokenTotals = field(default_factory=TokenTotals)
+    total_completed: int = 0

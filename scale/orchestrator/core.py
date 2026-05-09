@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from scale.config.schema import WorkflowConfig
 from scale.orchestrator.dispatch import is_eligible, sort_issues, retry_delay_ms
 from scale.orchestrator.state import (
-    LiveSession, OrchestratorState, RetryEntry, TokenTotals,
+    CompletedSession, LiveSession, OrchestratorState, RetryEntry, TokenTotals,
 )
 from scale.tracker.base import TrackerClient
 from scale.tracker.github import GitHubClient
@@ -101,7 +101,17 @@ class Orchestrator:
         except Exception as e:
             logger.warning("Startup terminal cleanup failed (continuing): %s", e)
 
+    async def _expire_completed(self) -> None:
+        ttl_s = self._config.agent.completed_display_s
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - ttl_s
+        async with self._lock:
+            self._state.completed = [
+                c for c in self._state.completed
+                if c.completed_at.timestamp() > cutoff
+            ]
+
     async def _tick(self) -> None:
+        await self._expire_completed()
         await self._reconcile()
         await self._fire_retries()
         if self._config.triage and self._triage_runner:
@@ -262,7 +272,13 @@ class Orchestrator:
                     self._state.token_totals.input_tokens += session.tokens.input_tokens
                     self._state.token_totals.output_tokens += session.tokens.output_tokens
                 self._state.claimed.discard(issue.id)
-                self._state.completed.add(issue.id)
+                self._state.completed.append(CompletedSession(
+                    issue=issue,
+                    turn_count=session.turn_count if session else 0,
+                    tokens=session.tokens if session else TokenTotals(),
+                    completed_at=datetime.now(tz=timezone.utc),
+                ))
+                self._state.total_completed += 1
             if self._config.tracker.terminal_labels:
                 await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             asyncio.create_task(self._workspace.remove(issue))
