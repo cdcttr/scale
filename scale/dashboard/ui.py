@@ -45,32 +45,33 @@ def _build_table(orch: "Orchestrator") -> Table:
     now_str = datetime.now().strftime("%m/%d %H:%M:%S")
 
     table = Table(box=box.SIMPLE, show_header=False, expand=True)
-    table.add_column("", style="bold cyan")
-    table.add_column("", style="white")
+    table.add_column("", style="bold cyan", width=6, no_wrap=True)
+    table.add_column("", style="white", ratio=1)
     table.add_column("", justify="right", style="dim")
     table.add_column("", justify="right", style="green")
     table.add_column("", justify="right", style="yellow")
     table.add_column("", justify="right", style="dim")
 
     table.add_row(
+        "",
         Text(
             f"Scale  ●  {len(state.running)} running  "
             f"{len(state.retry_queue)} retrying  "
             f"{len(state.completed)} completed",
             style="bold",
         ),
-        "", "", "", "", now_str,
+        "", "", "", now_str,
     )
     table.add_row("", "", "", "", "", "")
 
     if state.running:
-        table.add_row(Text("RUNNING", style="bold underline"), "", "", "", "", "")
+        table.add_row("", Text("RUNNING", style="bold underline"), "", "", "", "")
         for session in state.running.values():
             d = "[dim]" if session.finishing else ""
             e = "[/dim]" if session.finishing else ""
             table.add_row(
-                f"{d}  #{session.issue.number}{e}",
-                f"{d}{session.issue.title[:40]}{e}",
+                f"{d}#{session.issue.number}{e}",
+                f"{d}{session.issue.title[:60]}{e}",
                 f"{d}turn {session.turn_count}{e}",
                 f"{d}{_fmt_tokens(session.tokens.input_tokens)} in{e}",
                 f"{d}{_fmt_tokens(session.tokens.output_tokens)} out{e}",
@@ -79,7 +80,7 @@ def _build_table(orch: "Orchestrator") -> Table:
 
     if state.retry_queue:
         table.add_row("", "", "", "", "", "")
-        table.add_row(Text("RETRYING", style="bold underline"), "", "", "", "", "")
+        table.add_row("", Text("RETRYING", style="bold underline"), "", "", "", "")
         for entry in state.retry_queue:
             delta = (
                 entry.due_at.replace(tzinfo=timezone.utc)
@@ -87,8 +88,8 @@ def _build_table(orch: "Orchestrator") -> Table:
             ).total_seconds()
             retry_in = f"retry in {max(0, int(delta))}s"
             table.add_row(
-                f"  #{entry.issue.number}",
-                entry.issue.title[:40],
+                f"#{entry.issue.number}",
+                entry.issue.title[:60],
                 f"attempt {entry.attempt}",
                 "", retry_in,
                 entry.error[:30] if entry.error else "",
@@ -96,7 +97,7 @@ def _build_table(orch: "Orchestrator") -> Table:
 
     if state.completed:
         table.add_row("", "", "", "", "", "")
-        table.add_row(Text("RECENTLY COMPLETED", style="bold underline"), "", "", "", "", "")
+        table.add_row("", Text("RECENTLY COMPLETED", style="bold underline"), "", "", "", "")
         for cs in reversed(state.completed):
             age_s = int(
                 (datetime.now(tz=timezone.utc) - cs.completed_at.replace(tzinfo=timezone.utc))
@@ -105,8 +106,8 @@ def _build_table(orch: "Orchestrator") -> Table:
             row_style = "dim" if age_s >= 60 else None
             turns_label = f"{cs.turn_count} turn{'s' if cs.turn_count != 1 else ''}"
             table.add_row(
-                f"  #{cs.issue.number}",
-                cs.issue.title[:40],
+                f"#{cs.issue.number}",
+                cs.issue.title[:60],
                 turns_label,
                 f"{_fmt_tokens(cs.tokens.total)} tokens",
                 "",
@@ -116,12 +117,13 @@ def _build_table(orch: "Orchestrator") -> Table:
 
     table.add_row("", "", "", "", "", "")
     table.add_row(
+        "",
         Text(
             f"TOTALS  {_fmt_tokens(state.token_totals.total)} tokens  •  "
             f"{state.total_completed} completed",
             style="dim",
         ),
-        "", "", "", "", "",
+        "", "", "", "",
     )
     return table
 
