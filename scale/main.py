@@ -5,16 +5,26 @@ import logging
 import sys
 from pathlib import Path
 
-
-def _setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
+from rich.console import Console
 
 
-async def _run(workflow_path: Path, port: int | None) -> None:
+def _setup_logging(level: str, console: Console | None = None) -> None:
+    if console is not None:
+        from rich.logging import RichHandler
+        logging.basicConfig(
+            level=getattr(logging, level.upper(), logging.INFO),
+            format="%(message)s",
+            handlers=[RichHandler(console=console, show_path=False)],
+        )
+    else:
+        logging.basicConfig(
+            level=getattr(logging, level.upper(), logging.INFO),
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+            stream=sys.stderr,
+        )
+
+
+async def _run(workflow_path: Path, port: int | None, console: Console | None = None) -> None:
     from scale.config.loader import load_workflow
     from scale.tracker.github import GitHubClient
     from scale.orchestrator.core import Orchestrator
@@ -38,7 +48,7 @@ async def _run(workflow_path: Path, port: int | None) -> None:
 
     if sys.stdout.isatty():
         from scale.dashboard.ui import Dashboard
-        dashboard = Dashboard(orch)
+        dashboard = Dashboard(orch, console=console)
         tasks.append(asyncio.create_task(dashboard.run()))
 
     from scale.config.watcher import watch_workflow
@@ -216,8 +226,9 @@ def main() -> None:
         asyncio.run(_plan(Path(args.workflow), issue_numbers, args.dry_run, args.force))
         return
 
-    _setup_logging(args.log_level)
-    asyncio.run(_run(Path(args.workflow), args.port))
+    console = Console()
+    _setup_logging(args.log_level, console=console)
+    asyncio.run(_run(Path(args.workflow), args.port, console=console))
 
 
 if __name__ == "__main__":

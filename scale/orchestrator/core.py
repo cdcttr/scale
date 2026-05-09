@@ -249,8 +249,9 @@ class Orchestrator:
                 session.last_event_at = datetime.now(tz=timezone.utc)
                 if event.get("type") == "result":
                     usage = event.get("usage", {})
-                    session.tokens.input_tokens = usage.get("input_tokens", 0)
-                    session.tokens.output_tokens = usage.get("output_tokens", 0)
+                    session.tokens.input_tokens += usage.get("input_tokens", 0)
+                    session.tokens.output_tokens += usage.get("output_tokens", 0)
+                    session.turn_count += 1
 
         try:
             worker = self._make_worker()

@@ -147,6 +147,25 @@ def test_make_worker_returns_ssh_when_configured():
     assert w3._host == "user@host1"  # round-robin wraps
 
 
+def test_setup_logging_uses_rich_handler_when_console_provided():
+    import logging
+    from rich.console import Console
+    from rich.logging import RichHandler
+    from scale.main import _setup_logging
+
+    console = Console()
+    root = logging.getLogger()
+    original_handlers = root.handlers[:]
+    root.handlers.clear()
+    try:
+        _setup_logging("INFO", console=console)
+        rich_handlers = [h for h in root.handlers if isinstance(h, RichHandler)]
+        assert len(rich_handlers) >= 1
+        assert rich_handlers[0].console is console
+    finally:
+        root.handlers = original_handlers
+
+
 def test_version_command(capsys):
     import sys
     from unittest.mock import patch as mpatch
@@ -331,6 +350,70 @@ async def test_fire_retries_reschedules_when_at_capacity():
     # Should have rescheduled, not dispatched
     assert issue.id not in orch._state.running
     assert any(e.issue.id == issue.id for e in orch._state.retry_queue)
+
+
+@pytest.mark.asyncio
+async def test_on_event_accumulates_tokens_across_multiple_result_events():
+    """on_event must += tokens so each turn's usage is summed, not overwritten."""
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({"type": "result", "usage": {"input_tokens": 100, "output_tokens": 50}})
+            on_event({"type": "result", "usage": {"input_tokens": 200, "output_tokens": 80}})
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert orch._state.token_totals.input_tokens == 300
+    assert orch._state.token_totals.output_tokens == 130
+
+
+@pytest.mark.asyncio
+async def test_on_event_increments_turn_count_on_result():
+    """on_event must increment turn_count for each result event received."""
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    captured_turn_counts: list[int] = []
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        if on_event:
+            on_event({"type": "result", "usage": {"input_tokens": 10, "output_tokens": 5}})
+            s = orch._state.running.get(issue.id)
+            if s:
+                captured_turn_counts.append(s.turn_count)
+            on_event({"type": "result", "usage": {"input_tokens": 10, "output_tokens": 5}})
+            s = orch._state.running.get(issue.id)
+            if s:
+                captured_turn_counts.append(s.turn_count)
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert captured_turn_counts == [1, 2]
 
 
 def test_triage_subcommand_help(capsys):
