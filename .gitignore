@@ -8,3 +8,6 @@ build/
 .venv/
 venv/
 workspaces/
+logs/
+stats.jsonl
+.coverage
