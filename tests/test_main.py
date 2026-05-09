@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import sys
 import pytest
 
@@ -85,3 +86,21 @@ def test_explicit_missing_workflow_exits_with_code_1(tmp_path, monkeypatch, caps
         main()
     assert exc_info.value.code == 1
     assert "NO_SUCH.md" in capsys.readouterr().err
+
+
+# --- httpx log suppression ---
+
+def test_setup_logging_suppresses_httpx_at_info():
+    from scale.main import _setup_logging
+    _setup_logging("INFO")
+    httpx_logger = logging.getLogger("httpx")
+    assert httpx_logger.level == logging.WARNING
+
+
+def test_setup_logging_suppresses_httpx_with_console():
+    from rich.console import Console
+    from scale.main import _setup_logging
+    console = Console()
+    _setup_logging("INFO", console=console)
+    httpx_logger = logging.getLogger("httpx")
+    assert httpx_logger.level == logging.WARNING
