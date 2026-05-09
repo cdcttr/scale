@@ -2,9 +2,9 @@
 review:
   model: claude-haiku-4-5-20251001
   timeout_ms: 120000
-  pr_open_label: symphony:pr-open
-  needs_revision_label: symphony:needs-revision
-  conflict_label: symphony:conflict
+  pr_open_label: scale:pr-open
+  needs_revision_label: scale:needs-revision
+  conflict_label: scale:conflict
 ---
 
 You are a code reviewer. Review the pull request below for GitHub issue #{{ issue.number }}: **{{ issue.title }}**.
