@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 from rich.console import Console
 
-from scale.dashboard.ui import _elapsed, _fmt_tokens, _build_table, Dashboard
+from scale.dashboard.ui import _ago, _elapsed, _fmt_tokens, _build_table, Dashboard
 from scale.orchestrator.state import (
-    LiveSession, OrchestratorState, RetryEntry, TokenTotals,
+    CompletedSession, LiveSession, OrchestratorState, RetryEntry, TokenTotals,
 )
 from scale.tracker.models import Issue
 
@@ -136,3 +136,116 @@ def test_dashboard_creates_default_console_when_none_given():
     orch = MagicMock()
     dashboard = Dashboard(orch)
     assert isinstance(dashboard._console, Console)
+
+
+# ---------------------------------------------------------------------------
+# _ago helper
+# ---------------------------------------------------------------------------
+
+def test_ago_seconds():
+    dt = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
+    result = _ago(dt)
+    assert result.endswith("s ago")
+    assert "m" not in result
+
+
+def test_ago_minutes():
+    dt = datetime.now(tz=timezone.utc) - timedelta(seconds=130)
+    result = _ago(dt)
+    assert result.endswith("m ago")
+    assert "h" not in result
+
+
+def test_ago_hours():
+    dt = datetime.now(tz=timezone.utc) - timedelta(hours=3)
+    result = _ago(dt)
+    assert result.endswith("h ago")
+
+
+# ---------------------------------------------------------------------------
+# RECENTLY COMPLETED section
+# ---------------------------------------------------------------------------
+
+def _completed_session(number: int = 1, seconds_ago: int = 30) -> CompletedSession:
+    return CompletedSession(
+        issue=_issue(number),
+        turn_count=2,
+        tokens=TokenTotals(input_tokens=10000, output_tokens=5000),
+        completed_at=datetime.now(tz=timezone.utc) - timedelta(seconds=seconds_ago),
+    )
+
+
+def test_build_table_with_completed_session():
+    state = OrchestratorState()
+    state.completed.append(_completed_session())
+    table = _build_table(_orch(state))
+    assert table is not None
+
+
+def test_build_table_recently_completed_section_appears():
+    state = OrchestratorState()
+    state.completed.append(_completed_session(number=11, seconds_ago=120))
+    state.completed.append(_completed_session(number=8, seconds_ago=240))
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "RECENTLY COMPLETED" in output
+    assert "#11" in output
+    assert "#8" in output
+
+
+def test_build_table_completed_shows_turn_count_and_tokens():
+    state = OrchestratorState()
+    cs = CompletedSession(
+        issue=_issue(5),
+        turn_count=3,
+        tokens=TokenTotals(input_tokens=18000, output_tokens=400),
+        completed_at=datetime.now(tz=timezone.utc) - timedelta(seconds=10),
+    )
+    state.completed.append(cs)
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "3 turns" in output
+    assert "18.4k" in output
+
+
+def test_build_table_totals_uses_total_completed_not_visible_count():
+    state = OrchestratorState()
+    state.total_completed = 10
+    state.token_totals = TokenTotals(input_tokens=50000, output_tokens=9600)
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "10 completed" in output
+    assert "59.6k" in output
+
+
+def test_build_table_no_recently_completed_section_when_empty():
+    state = OrchestratorState()
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "RECENTLY COMPLETED" not in output
+
+
+def test_build_table_recently_completed_ordered_most_recent_first():
+    state = OrchestratorState()
+    state.completed.append(_completed_session(number=1, seconds_ago=240))
+    state.completed.append(_completed_session(number=2, seconds_ago=60))
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    pos1 = output.find("#1")
+    pos2 = output.find("#2")
+    assert pos2 < pos1
