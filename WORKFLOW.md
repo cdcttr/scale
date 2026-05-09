@@ -17,6 +17,7 @@ polling:
 
 workspace:
   root: ./workspaces
+  log_archive: ./logs
 
 hooks:
   after_create: |
