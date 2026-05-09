@@ -31,7 +31,7 @@ def _issue(**kwargs) -> Issue:
 
 
 def test_parse_plan_marker_valid():
-    body = '<!-- symphony-plan {"children": [51, 52], "depth": 0} -->'
+    body = '<!-- scale-plan {"children": [51, 52], "depth": 0} -->'
     data = _parse_plan_marker(body)
     assert data == {"children": [51, 52], "depth": 0}
 
@@ -41,7 +41,7 @@ def test_parse_plan_marker_not_a_marker():
 
 
 def test_parse_plan_marker_invalid_json():
-    assert _parse_plan_marker("<!-- symphony-plan {not valid json} -->") is None
+    assert _parse_plan_marker("<!-- scale-plan {not valid json} -->") is None
 
 
 def test_build_marker_roundtrip():
@@ -57,7 +57,7 @@ def test_get_depth_no_label():
 
 
 def test_get_depth_with_label():
-    issue = _issue(labels=["symphony:depth:2", "scale:ready"])
+    issue = _issue(labels=["scale:depth:2", "scale:ready"])
     assert _get_depth(issue) == 2
 
 
@@ -219,14 +219,14 @@ async def test_plan_issue_concept_partial_failure_posts_partial_marker(tmp_path)
 
 
 def test_get_depth_uses_max_when_multiple_labels():
-    issue = _issue(labels=["symphony:depth:1", "symphony:depth:3", "scale:ready"])
+    issue = _issue(labels=["scale:depth:1", "scale:depth:3", "scale:ready"])
     assert _get_depth(issue) == 3
 
 
 @pytest.mark.asyncio
 async def test_plan_issue_concept_depth_label_propagated(tmp_path):
-    """Children get symphony:depth:N+1 where N is the parent's depth."""
-    issue = _issue(labels=["symphony:depth:1"])
+    """Children get scale:depth:N+1 where N is the parent's depth."""
+    issue = _issue(labels=["scale:depth:1"])
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
     gh.create_issue.return_value = {"number": 51, "node_id": "node51"}
@@ -242,4 +242,4 @@ async def test_plan_issue_concept_depth_label_propagated(tmp_path):
 
     create_call = gh.create_issue.call_args
     labels_used = create_call[1]["labels"] if "labels" in create_call[1] else create_call[0][2]
-    assert "symphony:depth:2" in labels_used
+    assert "scale:depth:2" in labels_used

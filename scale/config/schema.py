@@ -34,6 +34,7 @@ class AgentConfig(BaseModel):
     max_retry_backoff_ms: int = 300000
     max_concurrent_agents_by_state: dict[str, int] = {}
     completed_display_s: int = 300
+    supervised_label: str = "scale:supervised"
 
 
 class CodexConfig(BaseModel):
