@@ -289,7 +289,7 @@ async def test_run_worker_adds_pr_open_label_when_review_configured():
 
     label_calls = [labels for _, labels in added_labels]
     assert any("symphony:pr-open" in labels for labels in label_calls)
-    assert not any("symphony:done" in labels for labels in label_calls)
+    assert not any("scale:done" in labels for labels in label_calls)
 
 
 @pytest.mark.asyncio
@@ -323,7 +323,7 @@ async def test_run_worker_adds_terminal_label_when_no_review():
         await orch._run_worker(issue, attempt=None)
 
     label_calls = [labels for _, labels in added_labels]
-    assert any("symphony:done" in labels for labels in label_calls)
+    assert any("scale:done" in labels for labels in label_calls)
 
 
 @pytest.mark.asyncio
@@ -420,7 +420,7 @@ async def test_run_reviewer_success_adds_terminal_and_removes_pr_open():
         await orch._run_reviewer(issue)
 
     label_calls = [labels for _, labels in add_calls]
-    assert any("symphony:done" in labels for labels in label_calls)
+    assert any("scale:done" in labels for labels in label_calls)
     assert any((n, lbl) == (issue.number, "symphony:pr-open") for n, lbl in remove_calls)
     assert issue.id not in orch._state.claimed
 
@@ -456,7 +456,7 @@ async def test_run_reviewer_failure_adds_conflict_label():
 
     label_calls = [labels for _, labels in add_calls]
     assert any("symphony:conflict" in labels for labels in label_calls)
-    assert not any("symphony:done" in labels for labels in label_calls)
+    assert not any("scale:done" in labels for labels in label_calls)
     assert any((n, lbl) == (issue.number, "symphony:pr-open") for n, lbl in remove_calls)
     assert issue.id not in orch._state.claimed
 
@@ -476,7 +476,7 @@ async def test_run_reviewer_no_pr_skips_review():
         orch._state.claimed.add(issue.id)
         await orch._run_reviewer(issue)
 
-    assert not any("symphony:done" in labels for _, labels in add_calls)
+    assert not any("scale:done" in labels for _, labels in add_calls)
     assert not any("symphony:conflict" in labels for _, labels in add_calls)
     assert issue.id not in orch._state.claimed
 

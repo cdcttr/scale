@@ -4,14 +4,13 @@ tracker:
   repo: cdcttr/scale
   api_token: $GITHUB_TOKEN
   active_labels:
-    - symphony:ready
+    - scale:ready
   skip_labels:
-    - symphony:skip
     - scale:skip
-    - symphony:concept
-    - symphony:planned
+    - scale:concept
+    - scale:planned
   terminal_labels:
-    - symphony:done
+    - scale:done
 
 polling:
   interval_ms: 60000
