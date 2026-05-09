@@ -18,6 +18,7 @@ class PollingConfig(BaseModel):
 
 class WorkspaceConfig(BaseModel):
     root: str = "./workspaces"
+    log_archive: Optional[str] = None
 
 
 class HooksConfig(BaseModel):
