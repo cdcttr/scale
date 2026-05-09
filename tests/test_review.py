@@ -47,9 +47,9 @@ def test_review_config_defaults():
     cfg = ReviewConfig()
     assert cfg.model == "claude-haiku-4-5-20251001"
     assert cfg.timeout_ms == 120000
-    assert cfg.pr_open_label == "symphony:pr-open"
-    assert cfg.needs_revision_label == "symphony:needs-revision"
-    assert cfg.conflict_label == "symphony:conflict"
+    assert cfg.pr_open_label == "scale:pr-open"
+    assert cfg.needs_revision_label == "scale:needs-revision"
+    assert cfg.conflict_label == "scale:conflict"
     assert cfg.template == ""
 
 
@@ -70,7 +70,7 @@ def test_workflow_config_with_review():
     assert cfg.review is not None
     assert cfg.review.model == "claude-opus-4-7"
     assert cfg.review.timeout_ms == 60000
-    assert cfg.review.pr_open_label == "symphony:pr-open"
+    assert cfg.review.pr_open_label == "scale:pr-open"
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ def test_load_workflow_review_md_default_fields(tmp_path, monkeypatch):
 
     assert cfg.review is not None
     assert cfg.review.model == "claude-haiku-4-5-20251001"
-    assert cfg.review.pr_open_label == "symphony:pr-open"
+    assert cfg.review.pr_open_label == "scale:pr-open"
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ async def test_run_worker_adds_pr_open_label_when_review_configured():
         await orch._run_worker(issue, attempt=None)
 
     label_calls = [labels for _, labels in added_labels]
-    assert any("symphony:pr-open" in labels for labels in label_calls)
+    assert any("scale:pr-open" in labels for labels in label_calls)
     assert not any("scale:done" in labels for labels in label_calls)
 
 
@@ -333,7 +333,7 @@ async def test_tick_dispatches_pr_open_issues_to_reviewer():
     tracker.fetch_candidate_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
 
-    pr_open_issue = _issue(number=5, labels=["symphony:pr-open"])
+    pr_open_issue = _issue(number=5, labels=["scale:pr-open"])
 
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
@@ -373,7 +373,7 @@ async def test_tick_does_not_redispatch_claimed_pr_open_issues():
     tracker.fetch_candidate_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
 
-    pr_open_issue = _issue(number=5, labels=["symphony:pr-open"])
+    pr_open_issue = _issue(number=5, labels=["scale:pr-open"])
 
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
@@ -395,7 +395,7 @@ async def test_run_reviewer_success_adds_terminal_and_removes_pr_open():
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
 
-    issue = _issue(number=3, labels=["symphony:pr-open"])
+    issue = _issue(number=3, labels=["scale:pr-open"])
 
     pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
@@ -421,7 +421,7 @@ async def test_run_reviewer_success_adds_terminal_and_removes_pr_open():
 
     label_calls = [labels for _, labels in add_calls]
     assert any("scale:done" in labels for labels in label_calls)
-    assert any((n, lbl) == (issue.number, "symphony:pr-open") for n, lbl in remove_calls)
+    assert any((n, lbl) == (issue.number, "scale:pr-open") for n, lbl in remove_calls)
     assert issue.id not in orch._state.claimed
 
 
@@ -431,7 +431,7 @@ async def test_run_reviewer_failure_adds_conflict_label():
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
 
-    issue = _issue(number=3, labels=["symphony:pr-open"])
+    issue = _issue(number=3, labels=["scale:pr-open"])
     pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
     add_calls: list[tuple] = []
@@ -455,9 +455,9 @@ async def test_run_reviewer_failure_adds_conflict_label():
         await orch._run_reviewer(issue)
 
     label_calls = [labels for _, labels in add_calls]
-    assert any("symphony:conflict" in labels for labels in label_calls)
+    assert any("scale:conflict" in labels for labels in label_calls)
     assert not any("scale:done" in labels for labels in label_calls)
-    assert any((n, lbl) == (issue.number, "symphony:pr-open") for n, lbl in remove_calls)
+    assert any((n, lbl) == (issue.number, "scale:pr-open") for n, lbl in remove_calls)
     assert issue.id not in orch._state.claimed
 
 
@@ -467,7 +467,7 @@ async def test_run_reviewer_no_pr_skips_review():
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
 
-    issue = _issue(number=3, labels=["symphony:pr-open"])
+    issue = _issue(number=3, labels=["scale:pr-open"])
 
     add_calls: list[tuple] = []
 
@@ -477,7 +477,7 @@ async def test_run_reviewer_no_pr_skips_review():
         await orch._run_reviewer(issue)
 
     assert not any("scale:done" in labels for _, labels in add_calls)
-    assert not any("symphony:conflict" in labels for _, labels in add_calls)
+    assert not any("scale:conflict" in labels for _, labels in add_calls)
     assert issue.id not in orch._state.claimed
 
 

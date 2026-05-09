@@ -78,9 +78,9 @@ class PlannerConfig(BaseModel):
 class ReviewConfig(BaseModel):
     model: str = "claude-haiku-4-5-20251001"
     timeout_ms: int = 120000
-    pr_open_label: str = "symphony:pr-open"
-    needs_revision_label: str = "symphony:needs-revision"
-    conflict_label: str = "symphony:conflict"
+    pr_open_label: str = "scale:pr-open"
+    needs_revision_label: str = "scale:needs-revision"
+    conflict_label: str = "scale:conflict"
     template: str = ""
 
 
