@@ -1,7 +1,9 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Optional
 
 from scale.config.schema import WorkflowConfig
@@ -319,6 +321,8 @@ class Orchestrator:
                 if session:
                     session.finishing = True
                 self._state.claimed.discard(issue.id)
+            if session:
+                await self._record_stats(issue, session, success=True, attempt=attempt)
             if self._config.review:
                 await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
             elif self._config.tracker.terminal_labels:
@@ -343,6 +347,60 @@ class Orchestrator:
                     self._state.token_totals.output_tokens += session.tokens.output_tokens
                 current_attempt = (attempt or 0) + 1
                 self._schedule_retry(issue, attempt=current_attempt, error=str(e))
+            if session:
+                await self._record_stats(issue, session, success=False, attempt=attempt)
+
+    async def _record_stats(
+        self,
+        issue: "Issue",
+        session: "LiveSession",
+        success: bool,
+        attempt: "Optional[int]",
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        duration_s = round((now - session.started_at).total_seconds())
+        attempt_num = (attempt or 0) + 1
+        timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        stats: dict = {
+            "issue": issue.number,
+            "turns": session.turn_count,
+            "input_tokens": session.tokens.input_tokens,
+            "output_tokens": session.tokens.output_tokens,
+            "duration_s": duration_s,
+            "attempt": attempt_num,
+            "success": success,
+            "timestamp": timestamp,
+        }
+
+        def _fmt_tokens(n: int) -> str:
+            return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+        def _fmt_duration(s: int) -> str:
+            return f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
+
+        marker = f"<!-- scale-stats {json.dumps(stats)} -->"
+        comment = (
+            f"{marker}\n\n"
+            "## Scale run complete\n\n"
+            f"- **Turns:** {stats['turns']}\n"
+            f"- **Tokens in:** {_fmt_tokens(stats['input_tokens'])}"
+            f"  |  **Tokens out:** {_fmt_tokens(stats['output_tokens'])}\n"
+            f"- **Duration:** {_fmt_duration(duration_s)}\n"
+            f"- **Attempt:** {attempt_num}"
+        )
+
+        try:
+            await self._github.post_comment(issue.number, comment)
+        except Exception as exc:
+            logger.warning("Failed to post stats comment for issue #%d: %s", issue.number, exc)
+
+        jsonl_record = {**stats, "issue_title": issue.title}
+        try:
+            with Path("stats.jsonl").open("a") as fh:
+                fh.write(json.dumps(jsonl_record) + "\n")
+        except Exception as exc:
+            logger.warning("Failed to write stats.jsonl: %s", exc)
 
     async def _run_planner(self, issue: Issue) -> None:
         try:
