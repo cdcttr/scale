@@ -121,8 +121,7 @@ async def _plan(
     await runner.run(issues, force=force)
 
 
-def main() -> None:
-    from importlib.metadata import version as _pkg_version
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scale — Claude Code orchestrator")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -237,9 +236,28 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
 
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
+    if args.command not in ("version",):
+        workflow_path = Path(args.workflow)
+        if not workflow_path.exists():
+            if args.workflow == "WORKFLOW.md":
+                print(
+                    "Error: no WORKFLOW.md found in current directory. "
+                    "Pass a path explicitly or create WORKFLOW.md here.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Error: workflow file not found: {args.workflow}", file=sys.stderr)
+            sys.exit(1)
+
     if args.command == "version":
+        from importlib.metadata import version as _pkg_version
         try:
             ver = _pkg_version("scale")
         except Exception:
