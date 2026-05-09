@@ -43,7 +43,7 @@ def _build_table(orch: "Orchestrator") -> Table:
 
     table.add_row(
         Text(
-            f"Symphony  ●  {len(state.running)} running  "
+            f"Scale  ●  {len(state.running)} running  "
             f"{len(state.retry_queue)} retrying  "
             f"{len(state.completed)} completed",
             style="bold",
@@ -94,12 +94,12 @@ def _build_table(orch: "Orchestrator") -> Table:
 
 
 class Dashboard:
-    def __init__(self, orch: "Orchestrator") -> None:
+    def __init__(self, orch: "Orchestrator", console: Console | None = None) -> None:
         self._orch = orch
+        self._console = console or Console()
 
     async def run(self) -> None:
-        console = Console()
-        with Live(console=console, refresh_per_second=0.5) as live:
+        with Live(console=self._console, refresh_per_second=0.5) as live:
             while True:
                 live.update(_build_table(self._orch))
                 await asyncio.sleep(2)

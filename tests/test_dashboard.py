@@ -1,7 +1,11 @@
+from __future__ import annotations
 from datetime import datetime, timezone, timedelta
+from io import StringIO
 from unittest.mock import MagicMock
 
-from scale.dashboard.ui import _elapsed, _fmt_tokens, _build_table
+from rich.console import Console
+
+from scale.dashboard.ui import _elapsed, _fmt_tokens, _build_table, Dashboard
 from scale.orchestrator.state import (
     LiveSession, OrchestratorState, RetryEntry, TokenTotals,
 )
@@ -110,3 +114,25 @@ def test_build_table_with_overdue_retry():
 
     table = _build_table(_orch(state))
     assert table is not None
+
+
+def test_build_table_header_says_scale_not_symphony():
+    table = _build_table(_orch(OrchestratorState()))
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(table)
+    output = console.file.getvalue()
+    assert "Scale" in output
+    assert "Symphony" not in output
+
+
+def test_dashboard_accepts_custom_console():
+    console = Console()
+    orch = MagicMock()
+    dashboard = Dashboard(orch, console=console)
+    assert dashboard._console is console
+
+
+def test_dashboard_creates_default_console_when_none_given():
+    orch = MagicMock()
+    dashboard = Dashboard(orch)
+    assert isinstance(dashboard._console, Console)
