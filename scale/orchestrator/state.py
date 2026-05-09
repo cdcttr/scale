@@ -25,6 +25,7 @@ class LiveSession:
     turn_count: int = 0
     tokens: TokenTotals = field(default_factory=TokenTotals)
     session_id: str = ""
+    finishing: bool = False
 
 
 @dataclass

@@ -66,13 +66,15 @@ def _build_table(orch: "Orchestrator") -> Table:
     if state.running:
         table.add_row(Text("RUNNING", style="bold underline"), "", "", "", "", "")
         for session in state.running.values():
+            d = "[dim]" if session.finishing else ""
+            e = "[/dim]" if session.finishing else ""
             table.add_row(
-                f"  #{session.issue.number}",
-                session.issue.title[:40],
-                f"turn {session.turn_count}",
-                f"{_fmt_tokens(session.tokens.input_tokens)} in",
-                f"{_fmt_tokens(session.tokens.output_tokens)} out",
-                _elapsed(session.started_at),
+                f"{d}  #{session.issue.number}{e}",
+                f"{d}{session.issue.title[:40]}{e}",
+                f"{d}turn {session.turn_count}{e}",
+                f"{d}{_fmt_tokens(session.tokens.input_tokens)} in{e}",
+                f"{d}{_fmt_tokens(session.tokens.output_tokens)} out{e}",
+                f"{d}{_elapsed(session.started_at)}{e}",
             )
 
     if state.retry_queue:

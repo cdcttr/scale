@@ -90,12 +90,16 @@ async def test_token_totals_accumulated_on_success():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
-    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
         MockWorker.return_value = mock_w
         await orch._run_worker(issue, attempt=None)
 
+    assert orch._state.running[issue.id].finishing is True
+    await orch._flush_finishing()
     assert orch._state.token_totals.input_tokens == 100
     assert orch._state.token_totals.output_tokens == 50
 
@@ -119,12 +123,15 @@ async def test_token_totals_accumulate_across_sessions():
             if on_event:
                 on_event({"type": "result", "usage": {"input_tokens": _i, "output_tokens": _o}})
 
-        with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+        with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+             patch.object(orch._github, "add_labels", AsyncMock()), \
+             patch.object(orch._workspace, "remove", AsyncMock()):
             mock_w = MagicMock()
             mock_w.run = _mock_run
             MockWorker.return_value = mock_w
             await orch._run_worker(issue, attempt=None)
 
+    await orch._flush_finishing()
     assert orch._state.token_totals.input_tokens == 300
     assert orch._state.token_totals.output_tokens == 130
 
@@ -382,8 +389,8 @@ async def test_on_event_accumulates_tokens_across_multiple_result_events():
 
 
 @pytest.mark.asyncio
-async def test_on_event_increments_turn_count_on_result():
-    """on_event must increment turn_count for each result event received."""
+async def test_on_event_increments_turn_count_on_assistant():
+    """on_event must increment turn_count for each assistant event received."""
     tracker = AsyncMock()
     tracker.fetch_terminal_issues.return_value = []
     tracker.fetch_issues_by_numbers.return_value = []
@@ -394,11 +401,11 @@ async def test_on_event_increments_turn_count_on_result():
 
     async def _mock_run(iss, cfg, attempt, on_event=None):
         if on_event:
-            on_event({"type": "result", "usage": {"input_tokens": 10, "output_tokens": 5}})
+            on_event({"type": "assistant"})
             s = orch._state.running.get(issue.id)
             if s:
                 captured_turn_counts.append(s.turn_count)
-            on_event({"type": "result", "usage": {"input_tokens": 10, "output_tokens": 5}})
+            on_event({"type": "assistant"})
             s = orch._state.running.get(issue.id)
             if s:
                 captured_turn_counts.append(s.turn_count)
@@ -656,8 +663,37 @@ async def test_tick_triage_fetch_failure_does_not_crash():
 
 
 # ---------------------------------------------------------------------------
-# CompletedSession
+# Finishing state / CompletedSession
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_worker_sets_finishing_on_success():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run(iss, cfg, attempt, on_event=None):
+        pass
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert issue.id in orch._state.running
+    assert orch._state.running[issue.id].finishing is True
+    assert issue.id not in orch._state.claimed
+
 
 @pytest.mark.asyncio
 async def test_completed_session_appended_on_success():
@@ -676,19 +712,21 @@ async def test_completed_session_appended_on_success():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
-    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
         MockWorker.return_value = mock_w
         await orch._run_worker(issue, attempt=None)
 
+    await orch._flush_finishing()
     assert len(orch._state.completed) == 1
     cs = orch._state.completed[0]
     assert isinstance(cs, CompletedSession)
     assert cs.issue.id == issue.id
     assert cs.tokens.input_tokens == 100
     assert cs.tokens.output_tokens == 50
-    assert cs.turn_count == 1
 
 
 @pytest.mark.asyncio
@@ -707,13 +745,77 @@ async def test_total_completed_incremented_on_success():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
-    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
         MockWorker.return_value = mock_w
         await orch._run_worker(issue, attempt=None)
 
+    await orch._flush_finishing()
     assert orch._state.total_completed == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_finishing_moves_session_to_completed():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.finishing = True
+    session.tokens.input_tokens = 42
+    session.tokens.output_tokens = 17
+    orch._state.running[issue.id] = session
+
+    await orch._flush_finishing()
+
+    assert issue.id not in orch._state.running
+    assert len(orch._state.completed) == 1
+    assert orch._state.completed[0].issue.id == issue.id
+    assert orch._state.token_totals.input_tokens == 42
+    assert orch._state.token_totals.output_tokens == 17
+    assert orch._state.total_completed == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_finishing_skips_active_sessions():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.finishing = False
+    orch._state.running[issue.id] = session
+
+    await orch._flush_finishing()
+
+    assert issue.id in orch._state.running
+    assert len(orch._state.completed) == 0
+
+
+@pytest.mark.asyncio
+async def test_finishing_sessions_flushed_on_next_tick():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.finishing = True
+    session.tokens.input_tokens = 10
+    session.tokens.output_tokens = 5
+    orch._state.running[issue.id] = session
+
+    await orch._tick()
+
+    assert issue.id not in orch._state.running
+    assert any(cs.issue.id == issue.id for cs in orch._state.completed)
+    assert orch._state.token_totals.input_tokens == 10
 
 
 @pytest.mark.asyncio
