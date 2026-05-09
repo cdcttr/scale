@@ -16,8 +16,8 @@ def test_tracker_config_valid():
     t = TrackerConfig(kind="github", repo="owner/repo", api_token="tok")
     assert t.repo == "owner/repo"
     assert t.active_labels == []
-    assert t.skip_labels == ["symphony:skip"]
-    assert t.terminal_labels == ["symphony:done"]
+    assert t.skip_labels == ["scale:skip"]
+    assert t.terminal_labels == ["scale:done"]
 
 def test_workflow_config_defaults():
     cfg = WorkflowConfig(
@@ -111,9 +111,9 @@ def test_load_workflow_resolves_relative_workspace(tmp_path, monkeypatch):
 def test_triage_config_defaults():
     cfg = TriageConfig()
     assert cfg.model == "claude-haiku-4-5-20251001"
-    assert cfg.ready_label == "symphony:ready"
-    assert cfg.needs_detail_label == "symphony:needs-detail"
-    assert cfg.triaged_label == "symphony:triaged"
+    assert cfg.ready_label == "scale:ready"
+    assert cfg.needs_detail_label == "scale:needs-detail"
+    assert cfg.triaged_label == "scale:triaged"
 
 
 def test_workflow_config_triage_optional():
@@ -132,8 +132,8 @@ def test_workflow_config_triage_set():
     )
     assert wf.triage is not None
     assert wf.triage.model == "claude-sonnet-4-6"
-    assert wf.triage.ready_label == "symphony:ready"
-    assert wf.triage.triaged_label == "symphony:triaged"
+    assert wf.triage.ready_label == "scale:ready"
+    assert wf.triage.triaged_label == "scale:triaged"
 
 
 from scale.config.schema import PlannerConfig
@@ -142,10 +142,10 @@ def test_planner_config_defaults():
     cfg = PlannerConfig()
     assert cfg.model == "claude-sonnet-4-6"
     assert cfg.max_depth == 3
-    assert cfg.plan_label == "symphony:plan"
-    assert cfg.leaf_label == "symphony:leaf"
-    assert cfg.concept_label == "symphony:concept"
-    assert cfg.planned_label == "symphony:planned"
+    assert cfg.plan_label == "scale:plan"
+    assert cfg.leaf_label == "scale:leaf"
+    assert cfg.concept_label == "scale:concept"
+    assert cfg.planned_label == "scale:planned"
     assert cfg.planner_workspace == "./workspaces/_planner"
 
 

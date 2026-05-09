@@ -57,13 +57,13 @@ def test_get_depth_no_label():
 
 
 def test_get_depth_with_label():
-    issue = _issue(labels=["symphony:depth:2", "symphony:ready"])
+    issue = _issue(labels=["symphony:depth:2", "scale:ready"])
     assert _get_depth(issue) == 2
 
 
 @pytest.mark.asyncio
 async def test_plan_issue_already_planned_skips(tmp_path):
-    issue = _issue(labels=["symphony:planned"])
+    issue = _issue(labels=["scale:planned"])
     gh = AsyncMock()
     runner = PlannerRunner(_config(), _codex(), gh)
     runner._workspace = tmp_path
@@ -73,7 +73,7 @@ async def test_plan_issue_already_planned_skips(tmp_path):
 
 @pytest.mark.asyncio
 async def test_plan_issue_already_planned_force_proceeds(tmp_path):
-    issue = _issue(labels=["symphony:planned"])
+    issue = _issue(labels=["scale:planned"])
     gh = AsyncMock()
     gh.fetch_issue_comments.return_value = []
     runner = PlannerRunner(_config(), _codex(), gh)
@@ -93,8 +93,8 @@ async def test_plan_issue_leaf_applies_leaf_label(tmp_path):
     runner._workspace = tmp_path
     with patch.object(runner._agent, "assess", AsyncMock(return_value=PlanAssessment(is_leaf=True))):
         await runner.plan_issue(issue)
-    gh.add_labels.assert_called_once_with(1, ["symphony:leaf"])
-    gh.remove_label.assert_called_once_with(1, "symphony:plan")
+    gh.add_labels.assert_called_once_with(1, ["scale:leaf"])
+    gh.remove_label.assert_called_once_with(1, "scale:plan")
 
 
 @pytest.mark.asyncio
@@ -111,8 +111,8 @@ async def test_plan_issue_concept_creates_children_and_labels(tmp_path):
     runner = PlannerRunner(_config(), _codex(), gh)
     runner._workspace = tmp_path
     assessment = PlanAssessment(is_leaf=False, children=[
-        ChildSpec(title="Child A", description="Do A", labels=["symphony:ready"]),
-        ChildSpec(title="Child B", description="Do B", labels=["symphony:ready"]),
+        ChildSpec(title="Child A", description="Do A", labels=["scale:ready"]),
+        ChildSpec(title="Child B", description="Do B", labels=["scale:ready"]),
     ])
     with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.plan_issue(issue)
@@ -124,9 +124,9 @@ async def test_plan_issue_concept_creates_children_and_labels(tmp_path):
     assert "52" in comment_body
 
     final_labels = gh.add_labels.call_args_list[-1][0][1]
-    assert "symphony:concept" in final_labels
-    assert "symphony:planned" in final_labels
-    gh.remove_label.assert_called_with(1, "symphony:plan")
+    assert "scale:concept" in final_labels
+    assert "scale:planned" in final_labels
+    gh.remove_label.assert_called_with(1, "scale:plan")
 
 
 @pytest.mark.asyncio
@@ -215,11 +215,11 @@ async def test_plan_issue_concept_partial_failure_posts_partial_marker(tmp_path)
     assert "51" in marker_body
     # Parent should NOT be labeled as planned
     for call in gh.add_labels.call_args_list:
-        assert "symphony:planned" not in call[0][1]
+        assert "scale:planned" not in call[0][1]
 
 
 def test_get_depth_uses_max_when_multiple_labels():
-    issue = _issue(labels=["symphony:depth:1", "symphony:depth:3", "symphony:ready"])
+    issue = _issue(labels=["symphony:depth:1", "symphony:depth:3", "scale:ready"])
     assert _get_depth(issue) == 3
 
 
@@ -235,7 +235,7 @@ async def test_plan_issue_concept_depth_label_propagated(tmp_path):
     runner = PlannerRunner(_config(), _codex(), gh)
     runner._workspace = tmp_path
     assessment = PlanAssessment(is_leaf=False, children=[
-        ChildSpec(title="Child A", description="Do A", labels=["symphony:ready"]),
+        ChildSpec(title="Child A", description="Do A", labels=["scale:ready"]),
     ])
     with patch.object(runner._agent, "assess", AsyncMock(return_value=assessment)):
         await runner.plan_issue(issue)

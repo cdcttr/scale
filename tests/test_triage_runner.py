@@ -109,9 +109,9 @@ async def test_triage_issue_ready_posts_and_labels():
     assert "## Symphony Triage" in body_posted
 
     labels_added = gh.add_labels.call_args[0][1]
-    assert "symphony:ready" in labels_added
-    assert "symphony:triaged" in labels_added
-    gh.remove_label.assert_called_once_with(issue.number, "symphony:needs-detail")
+    assert "scale:ready" in labels_added
+    assert "scale:triaged" in labels_added
+    gh.remove_label.assert_called_once_with(issue.number, "scale:needs-detail")
 
 
 @pytest.mark.asyncio
@@ -130,9 +130,9 @@ async def test_triage_issue_not_ready_posts_and_labels():
         await runner.triage_issue(issue)
 
     labels_added = gh.add_labels.call_args[0][1]
-    assert "symphony:needs-detail" in labels_added
-    assert "symphony:triaged" in labels_added
-    gh.remove_label.assert_called_once_with(issue.number, "symphony:ready")
+    assert "scale:needs-detail" in labels_added
+    assert "scale:triaged" in labels_added
+    gh.remove_label.assert_called_once_with(issue.number, "scale:ready")
 
 
 @pytest.mark.asyncio
