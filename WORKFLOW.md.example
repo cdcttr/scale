@@ -19,7 +19,7 @@ workspace:
 
 hooks:
   after_create: "git clone https://github.com/your-org/your-repo ."
-  before_run: "git fetch origin && git checkout -B symphony/{{ issue.number }} origin/main"
+  before_run: "git fetch origin && git checkout -B scale/{{ issue.number }} origin/main"
   after_run: ""
   before_remove: ""
   timeout_ms: 60000

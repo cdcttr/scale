@@ -1,0 +1,305 @@
+from __future__ import annotations
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import Callable, Optional
+
+from scale.config.schema import WorkflowConfig
+from scale.orchestrator.dispatch import is_eligible, sort_issues, retry_delay_ms
+from scale.orchestrator.state import (
+    LiveSession, OrchestratorState, RetryEntry, TokenTotals,
+)
+from scale.tracker.base import TrackerClient
+from scale.tracker.github import GitHubClient
+from scale.tracker.models import Issue
+from scale.worker.local import LocalWorker
+from scale.worker.ssh import SSHWorker
+from scale.workspace.manager import WorkspaceManager
+from scale.planner.runner import PlannerRunner
+
+logger = logging.getLogger(__name__)
+
+
+class Orchestrator:
+    def __init__(self, config: WorkflowConfig, tracker: TrackerClient) -> None:
+        self._config = config
+        self._tracker = tracker
+        self._state = OrchestratorState()
+        self._lock = asyncio.Lock()
+        self._workspace = WorkspaceManager(config)
+        self._refresh_event = asyncio.Event()
+        self._ssh_index = 0
+        self._github = GitHubClient(config.tracker)
+        self._planner_runner = None
+        if config.planner:
+            self._planner_runner = PlannerRunner(config.planner, config.codex, self._github)
+
+    def _has_slot(self, issue: Issue) -> bool:
+        """Check concurrency limits only — not claimed/running status."""
+        if len(self._state.running) >= self._config.agent.max_concurrent_agents:
+            return False
+        for state_name, limit in self._config.agent.max_concurrent_agents_by_state.items():
+            if issue.state == state_name:
+                count = sum(
+                    1 for s in self._state.running.values()
+                    if s.issue.state == state_name
+                )
+                if count >= limit:
+                    return False
+        return True
+
+    def _make_worker(self) -> LocalWorker | SSHWorker:
+        hosts = self._config.worker.ssh_hosts
+        if hosts:
+            host = hosts[self._ssh_index % len(hosts)]
+            self._ssh_index += 1
+            return SSHWorker(host, self._workspace, self._config)
+        return LocalWorker(self._workspace, self._config)
+
+    def get_state(self) -> OrchestratorState:
+        return self._state
+
+    def request_refresh(self) -> None:
+        self._refresh_event.set()
+
+    async def _gh_add_labels(self, number: int, labels: list[str]) -> None:
+        if self._github:
+            await self._github.add_labels(number, labels)
+
+    async def _gh_remove_label(self, number: int, label: str) -> None:
+        if self._github:
+            await self._github.remove_label(number, label)
+
+    async def run(self) -> None:
+        await self._startup_cleanup()
+        tasks = [asyncio.create_task(self._tick_loop())]
+        if self._config.planner:
+            tasks.append(asyncio.create_task(self._watch_planned()))
+        await asyncio.gather(*tasks)
+
+    async def _tick_loop(self) -> None:
+        while True:
+            self._refresh_event.clear()
+            await self._tick()
+            try:
+                await asyncio.wait_for(
+                    self._refresh_event.wait(),
+                    timeout=self._config.polling.interval_ms / 1000,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    async def _startup_cleanup(self) -> None:
+        try:
+            terminal = await self._tracker.fetch_terminal_issues()
+            for issue in terminal:
+                await self._workspace.remove(issue, hooks_enabled=False)
+        except Exception as e:
+            logger.warning("Startup terminal cleanup failed (continuing): %s", e)
+
+    async def _tick(self) -> None:
+        await self._reconcile()
+        await self._fire_retries()
+        # Dispatch plan-labeled issues to the planner
+        if self._config.planner and self._planner_runner:
+            try:
+                plan_issues = await self._tracker.fetch_issues_by_label(
+                    self._config.planner.plan_label
+                )
+                async with self._lock:
+                    for issue in plan_issues:
+                        if issue.id not in self._state.claimed:
+                            self._state.claimed.add(issue.id)
+                            asyncio.create_task(self._run_planner(issue))
+            except Exception as e:
+                logger.warning("Plan issue fetch failed: %s", e)
+        try:
+            issues = await self._tracker.fetch_candidate_issues()
+        except Exception as e:
+            logger.warning("Candidate fetch failed, skipping dispatch: %s", e)
+            return
+        sorted_issues = sort_issues(issues)
+        async with self._lock:
+            for issue in sorted_issues:
+                if not is_eligible(issue, self._state, self._config):
+                    continue
+                self._state.claimed.add(issue.id)
+                task = asyncio.create_task(self._run_worker(issue, attempt=None))
+                self._state.running[issue.id] = LiveSession(issue=issue, task=task)
+
+    async def _reconcile(self) -> None:
+        async with self._lock:
+            running_numbers = [
+                s.issue.number for s in self._state.running.values()
+            ]
+
+        if not running_numbers:
+            return
+
+        try:
+            refreshed = await self._tracker.fetch_issues_by_numbers(running_numbers)
+            refreshed_by_id = {i.id: i for i in refreshed}
+        except Exception as e:
+            logger.warning("State refresh failed, keeping workers running: %s", e)
+            return
+
+        now = datetime.now(tz=timezone.utc).timestamp()
+        stall_s = self._config.codex.stall_timeout_ms / 1000
+
+        async with self._lock:
+            for issue_id in list(self._state.running.keys()):
+                session = self._state.running.get(issue_id)
+                if session is None:
+                    continue
+
+                elapsed = now - session.last_event_at.timestamp()
+                if stall_s > 0 and elapsed > stall_s:
+                    logger.warning(
+                        "issue_id=%s stall detected after %.0fs, cancelling",
+                        issue_id, elapsed,
+                    )
+                    session.task.cancel()
+                    self._schedule_retry(session.issue, attempt=1, error="stall timeout")
+                    continue
+
+                refreshed_issue = refreshed_by_id.get(issue_id)
+                if refreshed_issue is None:
+                    session.task.cancel()
+                    continue
+                if refreshed_issue.state == "terminal":
+                    session.task.cancel()
+                    asyncio.create_task(self._workspace.remove(refreshed_issue))
+
+    def _schedule_retry(
+        self,
+        issue: Issue,
+        attempt: Optional[int],
+        error: str,
+    ) -> None:
+        delay_ms = retry_delay_ms(attempt, self._config.agent.max_retry_backoff_ms)
+        due_at = datetime.now(tz=timezone.utc).timestamp() + delay_ms / 1000
+        entry = RetryEntry(
+            issue=issue,
+            attempt=(attempt or 0) + 1,
+            due_at=datetime.fromtimestamp(due_at, tz=timezone.utc),
+            error=error,
+        )
+        self._state.retry_queue.append(entry)
+        self._state.retry_queue.sort(key=lambda e: e.due_at)
+        logger.info(
+            "issue_id=%s scheduled retry attempt=%d delay_ms=%d reason=%s",
+            issue.id, entry.attempt, delay_ms, error,
+        )
+
+    async def _fire_retries(self) -> None:
+        now = datetime.now(tz=timezone.utc)
+        async with self._lock:
+            due = [e for e in self._state.retry_queue if e.due_at <= now]
+            self._state.retry_queue = [
+                e for e in self._state.retry_queue if e.due_at > now
+            ]
+        for entry in due:
+            try:
+                issues = await self._tracker.fetch_issues_by_numbers([entry.issue.number])
+                if not issues or issues[0].state != "active":
+                    async with self._lock:
+                        self._state.claimed.discard(entry.issue.id)
+                    continue
+                if not self._has_slot(entry.issue):
+                    self._schedule_retry(entry.issue, entry.attempt, "no slots")
+                    continue
+                async with self._lock:
+                    task = asyncio.create_task(
+                        self._run_worker(entry.issue, attempt=entry.attempt)
+                    )
+                    self._state.running[entry.issue.id] = LiveSession(
+                        issue=entry.issue, task=task
+                    )
+            except Exception as e:
+                logger.warning("Retry fire failed for %s: %s", entry.issue.id, e)
+                self._schedule_retry(entry.issue, entry.attempt, str(e))
+
+    async def _run_worker(self, issue: Issue, attempt: Optional[int]) -> None:
+        def on_event(event: dict) -> None:
+            session = self._state.running.get(issue.id)
+            if session:
+                session.last_event_at = datetime.now(tz=timezone.utc)
+                if event.get("type") == "result":
+                    usage = event.get("usage", {})
+                    session.tokens.input_tokens = usage.get("input_tokens", 0)
+                    session.tokens.output_tokens = usage.get("output_tokens", 0)
+
+        try:
+            worker = self._make_worker()
+            await worker.run(issue, self._config, attempt, on_event=on_event)
+            async with self._lock:
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
+                self._state.claimed.discard(issue.id)
+                self._state.completed.add(issue.id)
+            if self._config.tracker.terminal_labels:
+                await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
+            asyncio.create_task(self._workspace.remove(issue))
+        except asyncio.CancelledError:
+            async with self._lock:
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
+            raise
+        except Exception as e:
+            logger.error(
+                "issue_id=%s issue_identifier=%s worker failed: %s",
+                issue.id, issue.identifier, e,
+            )
+            async with self._lock:
+                session = self._state.running.pop(issue.id, None)
+                if session:
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
+                current_attempt = (attempt or 0) + 1
+                self._schedule_retry(issue, attempt=current_attempt, error=str(e))
+
+    async def _run_planner(self, issue: Issue) -> None:
+        try:
+            await self._planner_runner.plan_issue(issue)
+        except Exception as e:
+            logger.error("Planner failed for issue #%d: %s", issue.number, e)
+        finally:
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
+
+    async def _watch_planned(self) -> None:
+        while True:
+            try:
+                await self._watch_planned_tick()
+            except Exception as e:
+                logger.warning("watch_planned tick failed: %s", e)
+            await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _watch_planned_tick(self) -> None:
+        if not self._config.planner or not self._planner_runner:
+            return
+        planned_issues = await self._tracker.fetch_issues_by_label(
+            self._config.planner.planned_label
+        )
+        for issue in planned_issues:
+            child_numbers = await self._planner_runner.get_child_numbers(issue)
+            if not child_numbers:
+                continue
+            children = await self._tracker.fetch_issues_by_numbers(child_numbers)
+            if not children:
+                continue
+            all_terminal = all(c.state == "terminal" for c in children)
+            if all_terminal:
+                logger.info(
+                    "All children of issue #%d complete, closing parent", issue.number
+                )
+                if not self._config.tracker.terminal_labels:
+                    logger.warning("Cannot close planned parent issues: terminal_labels is empty in tracker config")
+                    continue
+                terminal_label = self._config.tracker.terminal_labels[0]
+                await self._gh_add_labels(issue.number, [terminal_label])
+                await self._gh_remove_label(issue.number, self._config.planner.planned_label)

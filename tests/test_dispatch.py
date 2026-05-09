@@ -1,11 +1,11 @@
 import pytest
 from datetime import datetime
-from symphony.tracker.models import Issue
-from symphony.orchestrator.state import OrchestratorState, RetryEntry
-from symphony.orchestrator.dispatch import (
+from scale.tracker.models import Issue
+from scale.orchestrator.state import OrchestratorState, RetryEntry
+from scale.orchestrator.dispatch import (
     is_eligible, sort_issues, retry_delay_ms,
 )
-from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig
+from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig
 
 def _config(**agent_kwargs) -> WorkflowConfig:
     return WorkflowConfig(

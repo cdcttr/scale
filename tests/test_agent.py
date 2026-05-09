@@ -2,8 +2,8 @@ import json
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-from symphony.agent.claude import ClaudeRunner, parse_stream_event, TurnResult, TokenUsage
-from symphony.config.schema import CodexConfig
+from scale.agent.claude import ClaudeRunner, parse_stream_event, TurnResult, TokenUsage
+from scale.config.schema import CodexConfig
 
 
 def _runner() -> ClaudeRunner:
