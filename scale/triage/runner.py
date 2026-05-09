@@ -101,6 +101,13 @@ class TriageRunner:
                 [self._config.ready_label, self._config.triaged_label],
             )
             await self._client.remove_label(issue.number, self._config.needs_detail_label)
+        elif assessment.needs_approval:
+            await self._client.add_labels(
+                issue.number,
+                [self._config.needs_approval_label, self._config.triaged_label],
+            )
+            await self._client.remove_label(issue.number, self._config.ready_label)
+            await self._client.remove_label(issue.number, self._config.needs_detail_label)
         else:
             await self._client.add_labels(
                 issue.number,
