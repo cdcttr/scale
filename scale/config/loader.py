@@ -42,4 +42,12 @@ def load_workflow(path: Path) -> WorkflowConfig:
         data["workspace"] = {}
     data["workspace"]["root"] = root
 
+    review_path = path.parent / "REVIEW.md"
+    if review_path.exists():
+        review_post = frontmatter.load(str(review_path))
+        review_meta = resolve_vars(dict(review_post.metadata))
+        review_section = review_meta.get("review") or {}
+        review_section["template"] = review_post.content
+        data["review"] = review_section
+
     return WorkflowConfig.model_validate(data)
