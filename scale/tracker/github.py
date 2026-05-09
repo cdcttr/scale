@@ -99,6 +99,15 @@ class GitHubClient(TrackerClient):
                 issues.append(normalized)
         return issues
 
+    async def fetch_open_issues(self) -> list[Issue]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            items = await self._paginate(client, {"state": "open"})
+        return [
+            self._normalize(item)
+            for item in items
+            if "pull_request" not in item
+        ]
+
     async def fetch_issues_by_numbers(self, numbers: list[int]) -> list[Issue]:
         async def _fetch(n: int) -> Optional[Issue]:
             async with httpx.AsyncClient(timeout=30) as client:
