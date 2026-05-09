@@ -111,6 +111,7 @@ class Orchestrator:
             ]
 
     async def _tick(self) -> None:
+        await self._flush_finishing()
         await self._expire_completed()
         await self._reconcile()
         await self._fire_retries()
@@ -164,6 +165,7 @@ class Orchestrator:
         async with self._lock:
             running_numbers = [
                 s.issue.number for s in self._state.running.values()
+                if not s.finishing
             ]
 
         if not running_numbers:
@@ -182,7 +184,7 @@ class Orchestrator:
         async with self._lock:
             for issue_id in list(self._state.running.keys()):
                 session = self._state.running.get(issue_id)
-                if session is None:
+                if session is None or session.finishing:
                     continue
 
                 elapsed = now - session.last_event_at.timestamp()
@@ -252,33 +254,42 @@ class Orchestrator:
                 logger.warning("Retry fire failed for %s: %s", entry.issue.id, e)
                 self._schedule_retry(entry.issue, entry.attempt, str(e))
 
+    async def _flush_finishing(self) -> None:
+        async with self._lock:
+            for issue_id in list(self._state.running.keys()):
+                session = self._state.running.get(issue_id)
+                if session and session.finishing:
+                    self._state.running.pop(issue_id)
+                    self._state.token_totals.input_tokens += session.tokens.input_tokens
+                    self._state.token_totals.output_tokens += session.tokens.output_tokens
+                    self._state.completed.append(CompletedSession(
+                        issue=session.issue,
+                        turn_count=session.turn_count,
+                        tokens=session.tokens,
+                        completed_at=datetime.now(tz=timezone.utc),
+                    ))
+                    self._state.total_completed += 1
+
     async def _run_worker(self, issue: Issue, attempt: Optional[int]) -> None:
         def on_event(event: dict) -> None:
             session = self._state.running.get(issue.id)
             if session:
                 session.last_event_at = datetime.now(tz=timezone.utc)
+                if event.get("type") == "assistant":
+                    session.turn_count += 1
                 if event.get("type") == "result":
                     usage = event.get("usage", {})
                     session.tokens.input_tokens += usage.get("input_tokens", 0)
                     session.tokens.output_tokens += usage.get("output_tokens", 0)
-                    session.turn_count += 1
 
         try:
             worker = self._make_worker()
             await worker.run(issue, self._config, attempt, on_event=on_event)
             async with self._lock:
-                session = self._state.running.pop(issue.id, None)
+                session = self._state.running.get(issue.id)
                 if session:
-                    self._state.token_totals.input_tokens += session.tokens.input_tokens
-                    self._state.token_totals.output_tokens += session.tokens.output_tokens
+                    session.finishing = True
                 self._state.claimed.discard(issue.id)
-                self._state.completed.append(CompletedSession(
-                    issue=issue,
-                    turn_count=session.turn_count if session else 0,
-                    tokens=session.tokens if session else TokenTotals(),
-                    completed_at=datetime.now(tz=timezone.utc),
-                ))
-                self._state.total_completed += 1
             if self._config.tracker.terminal_labels:
                 await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             asyncio.create_task(self._workspace.remove(issue))

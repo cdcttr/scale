@@ -249,3 +249,34 @@ def test_build_table_recently_completed_ordered_most_recent_first():
     pos1 = output.find("#1")
     pos2 = output.find("#2")
     assert pos2 < pos1
+
+
+# ---------------------------------------------------------------------------
+# Finishing session rendering
+# ---------------------------------------------------------------------------
+
+def test_build_table_finishing_session_rendered_dim():
+    state = OrchestratorState()
+    task = MagicMock()
+    session = LiveSession(issue=_issue(), task=task)
+    session.finishing = True
+    session.tokens = TokenTotals(input_tokens=100, output_tokens=40)
+    state.running["i1"] = session
+
+    console = Console(file=StringIO(), width=200, highlight=False, markup=True)
+    table = _build_table(_orch(state))
+    console.print(table)
+    output = console.file.getvalue()
+    assert table is not None
+    assert "Fix the thing" in output
+
+
+def test_build_table_active_session_not_dim():
+    state = OrchestratorState()
+    task = MagicMock()
+    session = LiveSession(issue=_issue(), task=task)
+    session.finishing = False
+    state.running["i1"] = session
+
+    table = _build_table(_orch(state))
+    assert table is not None
