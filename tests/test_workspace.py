@@ -1,9 +1,9 @@
 import pytest
 from pathlib import Path
 from datetime import datetime
-from symphony.workspace.manager import WorkspaceManager, sanitize_identifier
-from symphony.tracker.models import Issue
-from symphony.config.schema import WorkflowConfig, TrackerConfig, WorkspaceConfig, HooksConfig
+from scale.workspace.manager import WorkspaceManager, sanitize_identifier
+from scale.tracker.models import Issue
+from scale.config.schema import WorkflowConfig, TrackerConfig, WorkspaceConfig, HooksConfig
 
 def _config(root: str, **hook_kwargs) -> WorkflowConfig:
     return WorkflowConfig(

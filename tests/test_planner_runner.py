@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from symphony.planner.runner import PlannerRunner, _parse_plan_marker, _build_marker, _get_depth
-from symphony.planner.agent import PlanAssessment, ChildSpec
-from symphony.tracker.models import Issue
-from symphony.config.schema import CodexConfig, PlannerConfig
+from scale.planner.runner import PlannerRunner, _parse_plan_marker, _build_marker, _get_depth
+from scale.planner.agent import PlanAssessment, ChildSpec
+from scale.tracker.models import Issue
+from scale.config.schema import CodexConfig, PlannerConfig
 
 
 def _config(**kwargs) -> PlannerConfig:

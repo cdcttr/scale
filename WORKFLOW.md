@@ -39,9 +39,9 @@ planner:
 #   port: 8080
 #   api_token: $SYMPHONY_API_TOKEN
 ---
-You are implementing a GitHub issue on the Symphony project.
+You are implementing a GitHub issue on the Scale project.
 
-Symphony is a self-hosted Python asyncio daemon that dispatches Claude Code agents against a GitHub Issues backlog. You are running inside a clone of that repo.
+Scale is a self-hosted Python asyncio daemon that dispatches Claude Code agents against a GitHub Issues backlog. You are running inside a clone of that repo.
 
 ## Issue
 
@@ -59,7 +59,7 @@ Symphony is a self-hosted Python asyncio daemon that dispatches Claude Code agen
 ## Project layout
 
 ```
-symphony/
+scale/
   agent/claude.py        — ClaudeRunner: wraps claude CLI subprocess, stream-json parsing
   config/schema.py       — Pydantic v2 config models (WorkflowConfig and friends)
   config/loader.py       — WORKFLOW.md frontmatter parser, $VAR env substitution
@@ -94,7 +94,7 @@ All AI operations use `ClaudeRunner` (subprocess around the `claude` CLI) — ne
 6. **Open a pull request.**
 
 ```bash
-git checkout -b symphony/{{ issue.number }}
+git checkout -b scale/{{ issue.number }}
 git add <files>
 git commit -m "<what changed and why in one line>"
 gh pr create \

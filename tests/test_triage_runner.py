@@ -2,10 +2,10 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from symphony.triage.runner import TriageRunner, _parse_triage_timestamp, _needs_triage
-from symphony.triage.agent import TriageAssessment
-from symphony.tracker.models import Issue
-from symphony.config.schema import CodexConfig, TriageConfig
+from scale.triage.runner import TriageRunner, _parse_triage_timestamp, _needs_triage
+from scale.triage.agent import TriageAssessment
+from scale.tracker.models import Issue
+from scale.config.schema import CodexConfig, TriageConfig
 
 
 def _config(**kwargs) -> TriageConfig:

@@ -6,11 +6,11 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from symphony.agent.claude import TurnResult, TokenUsage
-from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig
-from symphony.tracker.models import Issue
-from symphony.worker.local import LocalWorker
-from symphony.worker.ssh import SSHWorker
+from scale.agent.claude import TurnResult, TokenUsage
+from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig
+from scale.tracker.models import Issue
+from scale.worker.local import LocalWorker
+from scale.worker.ssh import SSHWorker
 
 
 def _config(max_turns: int = 3) -> WorkflowConfig:

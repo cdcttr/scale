@@ -1,6 +1,6 @@
-# Symphony
+# Scale
 
-A self-hosted Python daemon that dispatches Claude Code agents against a GitHub Issues backlog. Point it at a repo, write a prompt template, and Symphony handles the rest: polling for open issues, spawning Claude Code CLI processes in isolated workspaces, managing concurrency, retrying failures, and cleaning up when work is done.
+A self-hosted Python daemon that dispatches Claude Code agents against a GitHub Issues backlog. Point it at a repo, write a prompt template, and Scale handles the rest: polling for open issues, spawning Claude Code CLI processes in isolated workspaces, managing concurrency, retrying failures, and cleaning up when work is done.
 
 Inspired by [OpenAI's Symphony](https://github.com/openai/openai-symphony), reimplemented for Claude Code.
 
@@ -9,9 +9,9 @@ Inspired by [OpenAI's Symphony](https://github.com/openai/openai-symphony), reim
 ## How it works
 
 1. You label a GitHub issue `symphony:ready`
-2. Symphony picks it up, clones the repo into an isolated workspace, and runs `claude` with your prompt template rendered against the issue
+2. Scale picks it up, clones the repo into an isolated workspace, and runs `claude` with your prompt template rendered against the issue
 3. The agent reads the issue, implements the change, opens a PR
-4. Symphony adds `symphony:done` and moves to the next issue
+4. Scale adds `symphony:done` and moves to the next issue
 
 Failures retry with exponential backoff. Concurrency is bounded by `max_concurrent_agents`. A live TUI dashboard shows what's running.
 
@@ -76,15 +76,15 @@ export GITHUB_TOKEN=$(gh auth token)
 **Run the dispatch loop:**
 
 ```bash
-symphony run WORKFLOW.md
+scale run WORKFLOW.md
 ```
 
 **Pre-screen issues before dispatch** (uses Claude Haiku to assess readiness):
 
 ```bash
-symphony triage WORKFLOW.md --issue 12
-symphony triage WORKFLOW.md          # all open issues
-symphony triage WORKFLOW.md --dry-run
+scale triage WORKFLOW.md --issue 12
+scale triage WORKFLOW.md          # all open issues
+scale triage WORKFLOW.md --dry-run
 ```
 
 Triage labels issues `symphony:ready` or `symphony:needs-detail` and posts a comment explaining the verdict. Issues are re-triaged automatically when updated.
@@ -92,8 +92,8 @@ Triage labels issues `symphony:ready` or `symphony:needs-detail` and posts a com
 **Decompose high-level issues into leaf tasks** (uses Claude Sonnet):
 
 ```bash
-symphony plan WORKFLOW.md --issue 7
-symphony plan WORKFLOW.md --issue 7 --dry-run
+scale plan WORKFLOW.md --issue 7
+scale plan WORKFLOW.md --issue 7 --dry-run
 ```
 
 Requires a `planner:` section in WORKFLOW.md. Label a parent issue `symphony:plan` and the planner will either classify it as directly implementable (`symphony:leaf`) or break it into child issues (`symphony:planned`).
@@ -103,10 +103,10 @@ Requires a `planner:` section in WORKFLOW.md. Label a parent issue `symphony:pla
 ## Commands
 
 ```
-symphony run WORKFLOW.md [--port N] [--log-level DEBUG|INFO|WARNING|ERROR]
-symphony triage WORKFLOW.md [--issue N[,N,...]] [--all] [--model MODEL] [--dry-run]
-symphony plan WORKFLOW.md --issue N[,N,...] [--force] [--dry-run]
-symphony version
+scale run WORKFLOW.md [--port N] [--log-level DEBUG|INFO|WARNING|ERROR]
+scale triage WORKFLOW.md [--issue N[,N,...]] [--all] [--model MODEL] [--dry-run]
+scale plan WORKFLOW.md --issue N[,N,...] [--force] [--dry-run]
+scale version
 ```
 
 ---
@@ -123,7 +123,7 @@ symphony version
 | `symphony:concept` | Planner classified as needing decomposition |
 | `symphony:planned` | Children created; parent waiting for them to finish |
 | `symphony:done` | Terminal — agent completed, workspace removed |
-| `symphony:skip` | Ignored by Symphony |
+| `symphony:skip` | Ignored by Scale |
 
 ---
 
@@ -154,14 +154,14 @@ It contains the full rendered prompt, every streaming event from Claude as JSON,
 
 ---
 
-## Running Symphony on itself
+## Running Scale on itself
 
 This repo includes a `WORKFLOW.md` configured to dispatch agents against its own GitHub Issues. To use it:
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
-symphony triage WORKFLOW.md --issue N
-symphony run WORKFLOW.md
+scale triage WORKFLOW.md --issue N
+scale run WORKFLOW.md
 ```
 
 ---

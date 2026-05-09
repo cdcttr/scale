@@ -2,12 +2,12 @@ import asyncio
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
-from symphony.orchestrator.core import Orchestrator
-from symphony.orchestrator.state import LiveSession, RetryEntry
-from symphony.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig
-from symphony.tracker.models import Issue
-from symphony.worker.local import LocalWorker
-from symphony.worker.ssh import SSHWorker
+from scale.orchestrator.core import Orchestrator
+from scale.orchestrator.state import LiveSession, RetryEntry
+from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig
+from scale.tracker.models import Issue
+from scale.worker.local import LocalWorker
+from scale.worker.ssh import SSHWorker
 
 def _config(**agent_kwargs) -> WorkflowConfig:
     return WorkflowConfig(
@@ -90,7 +90,7 @@ async def test_token_totals_accumulated_on_success():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
-    with patch("symphony.orchestrator.core.LocalWorker") as MockWorker:
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
         mock_w = MagicMock()
         mock_w.run = _mock_run
         MockWorker.return_value = mock_w
@@ -119,7 +119,7 @@ async def test_token_totals_accumulate_across_sessions():
             if on_event:
                 on_event({"type": "result", "usage": {"input_tokens": _i, "output_tokens": _o}})
 
-        with patch("symphony.orchestrator.core.LocalWorker") as MockWorker:
+        with patch("scale.orchestrator.core.LocalWorker") as MockWorker:
             mock_w = MagicMock()
             mock_w.run = _mock_run
             MockWorker.return_value = mock_w
@@ -150,11 +150,11 @@ def test_make_worker_returns_ssh_when_configured():
 def test_version_command(capsys):
     import sys
     from unittest.mock import patch as mpatch
-    with mpatch.object(sys, "argv", ["symphony", "version"]):
-        from symphony.main import main
+    with mpatch.object(sys, "argv", ["scale", "version"]):
+        from scale.main import main
         main()
     captured = capsys.readouterr()
-    assert captured.out.startswith("symphony ")
+    assert captured.out.startswith("scale ")
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +336,8 @@ async def test_fire_retries_reschedules_when_at_capacity():
 def test_triage_subcommand_help(capsys):
     import sys
     from unittest.mock import patch as mpatch
-    with mpatch.object(sys, "argv", ["symphony", "triage", "--help"]):
-        from symphony.main import main
+    with mpatch.object(sys, "argv", ["scale", "triage", "--help"]):
+        from scale.main import main
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 0
@@ -374,7 +374,7 @@ async def test_tick_dispatches_plan_issues_to_planner():
     tracker.fetch_issues_by_numbers.return_value = []
     tracker.fetch_issues_by_label.return_value = [_plan_issue()]
 
-    with patch("symphony.orchestrator.core.PlannerRunner"):
+    with patch("scale.orchestrator.core.PlannerRunner"):
         orch = Orchestrator(_config_with_planner(), tracker)
         with patch.object(orch, "_run_planner", AsyncMock()) as mock_run_planner:
             await orch._tick()
@@ -409,7 +409,7 @@ async def test_watch_planned_closes_parent_when_all_children_done():
     tracker.fetch_issues_by_label.return_value = [parent]
     tracker.fetch_issues_by_numbers.return_value = [child1, child2]
 
-    with patch("symphony.orchestrator.core.PlannerRunner") as MockRunner:
+    with patch("scale.orchestrator.core.PlannerRunner") as MockRunner:
         instance = MockRunner.return_value
         instance.get_child_numbers = AsyncMock(return_value=[51, 52])
         instance.plan_issue = AsyncMock()

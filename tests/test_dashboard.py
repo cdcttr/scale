@@ -1,11 +1,11 @@
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
 
-from symphony.dashboard.ui import _elapsed, _fmt_tokens, _build_table
-from symphony.orchestrator.state import (
+from scale.dashboard.ui import _elapsed, _fmt_tokens, _build_table
+from scale.orchestrator.state import (
     LiveSession, OrchestratorState, RetryEntry, TokenTotals,
 )
-from symphony.tracker.models import Issue
+from scale.tracker.models import Issue
 
 
 def _issue(number: int = 1) -> Issue:

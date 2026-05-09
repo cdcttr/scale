@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from symphony.triage.agent import TriageAgent, TriageAssessment
-from symphony.tracker.models import Issue
-from symphony.config.schema import CodexConfig, TriageConfig
-from symphony.agent.claude import TurnResult
+from scale.triage.agent import TriageAgent, TriageAssessment
+from scale.tracker.models import Issue
+from scale.config.schema import CodexConfig, TriageConfig
+from scale.agent.claude import TurnResult
 
 
 def _config(**kwargs) -> TriageConfig:

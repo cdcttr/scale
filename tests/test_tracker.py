@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime
-from symphony.tracker.models import Issue
+from scale.tracker.models import Issue
 
 def _make_issue(**kwargs) -> Issue:
     defaults = dict(
@@ -36,8 +36,8 @@ def test_issue_with_priority():
 
 import respx
 import httpx
-from symphony.tracker.github import GitHubClient, _slugify, _parse_priority
-from symphony.config.schema import TrackerConfig
+from scale.tracker.github import GitHubClient, _slugify, _parse_priority
+from scale.config.schema import TrackerConfig
 
 def _config(**kwargs) -> TrackerConfig:
     defaults = dict(kind="github", repo="owner/repo", api_token="tok")
