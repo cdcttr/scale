@@ -41,18 +41,31 @@ def _mock_workspace(tmp_path: Path) -> MagicMock:
 
 
 def _make_proc(lines: list[str], returncode: int = 0) -> MagicMock:
+    encoded = [(line + "\n").encode() for line in lines]
+
     class _Stdout:
+        def __init__(self) -> None:
+            self._index = 0
+
         def __aiter__(self):
             return self._gen()
 
         async def _gen(self):
-            for line in lines:
-                yield (line + "\n").encode()
+            for line in encoded:
+                yield line
+
+        async def readline(self) -> bytes:
+            if self._index < len(encoded):
+                line = encoded[self._index]
+                self._index += 1
+                return line
+            return b""
 
     proc = MagicMock()
     proc.returncode = returncode
     proc.stdout = _Stdout()
     proc.wait = AsyncMock()
+    proc.kill = MagicMock()
     return proc
 
 

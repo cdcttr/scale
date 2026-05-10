@@ -2,10 +2,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from scale.agent.stall import WorkspaceState, gather_workspace_state, get_head_sha
 from scale.config.schema import CodexConfig
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ class TurnResult:
     usage: Optional[TokenUsage]
     message: str = ""
     stderr: str = ""
+    stall_info: Optional[WorkspaceState] = field(default=None)
 
 
 def parse_stream_event(line: str) -> Optional[TurnResult]:
@@ -88,10 +91,81 @@ class ClaudeRunner:
             limit=8 * 1024 * 1024,
         )
 
+        start_sha = await get_head_sha(workspace)
+        stall_timeout_s = self._config.stall_timeout_ms / 1000
+        grace_period_s = self._config.stall_grace_period_ms / 1000
+        heartbeat_s = self._config.stall_heartbeat_s
+
         result: Optional[TurnResult] = None
+        last_activity = time.monotonic()
+        stall_detected_at: Optional[float] = None
+        stall_workspace_state: Optional[WorkspaceState] = None
 
         assert proc.stdout is not None
-        async for raw_line in proc.stdout:
+        while True:
+            try:
+                raw_line = await asyncio.wait_for(
+                    proc.stdout.readline(),
+                    timeout=heartbeat_s,
+                )
+            except asyncio.TimeoutError:
+                now = time.monotonic()
+                elapsed_s = now - last_activity
+
+                if on_event:
+                    on_event({"type": "scale:heartbeat", "elapsed_s": round(elapsed_s)})
+
+                if stall_detected_at is not None:
+                    if (now - stall_detected_at) >= grace_period_s:
+                        proc.kill()
+                        await proc.wait()
+                        logger.warning(
+                            "stall grace period exceeded in %s after %.0fs",
+                            workspace, now - stall_detected_at,
+                        )
+                        return TurnResult(
+                            success=False,
+                            usage=None,
+                            message=f"Stall grace period exceeded after {now - stall_detected_at:.0f}s",
+                            stall_info=stall_workspace_state,
+                        )
+                elif elapsed_s >= stall_timeout_s:
+                    ws_state = await gather_workspace_state(workspace, since_sha=start_sha)
+                    stall_workspace_state = ws_state
+                    stall_event: dict = {
+                        "type": "scale:stall",
+                        "elapsed_s": round(elapsed_s),
+                        "uncommitted_files": ws_state.uncommitted_files,
+                        "commits_since_start": ws_state.commits_since_start,
+                        "status_summary": ws_state.status_summary,
+                        "grace_period": ws_state.has_progress,
+                    }
+                    if on_event:
+                        on_event(stall_event)
+                    logger.warning(
+                        "stall detected in %s — elapsed=%.0fs uncommitted=%d commits_since=%d grace=%s",
+                        workspace, elapsed_s, ws_state.uncommitted_files,
+                        ws_state.commits_since_start, ws_state.has_progress,
+                    )
+                    if ws_state.has_progress:
+                        stall_detected_at = now
+                    else:
+                        proc.kill()
+                        await proc.wait()
+                        return TurnResult(
+                            success=False,
+                            usage=None,
+                            message=f"Stall timeout after {elapsed_s:.0f}s with no workspace progress",
+                            stall_info=ws_state,
+                        )
+                continue
+
+            if not raw_line:
+                break
+
+            last_activity = time.monotonic()
+            stall_detected_at = None
+
             line = raw_line.decode().strip()
             if not line:
                 continue

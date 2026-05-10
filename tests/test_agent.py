@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from scale.agent.claude import ClaudeRunner, parse_stream_event, TurnResult, TokenUsage
+from scale.agent.stall import WorkspaceState
 from scale.config.schema import CodexConfig
 
 
@@ -15,6 +16,7 @@ def _make_proc(lines: list[str], returncode: int = 0):
     class _Stdout:
         def __init__(self, ls: list[str]) -> None:
             self._lines = [(ln + "\n").encode() for ln in ls]
+            self._index = 0
 
         def __aiter__(self):
             return self._gen()
@@ -23,12 +25,20 @@ def _make_proc(lines: list[str], returncode: int = 0):
             for line in self._lines:
                 yield line
 
+        async def readline(self) -> bytes:
+            if self._index < len(self._lines):
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+            return b""
+
     proc = MagicMock()
     proc.returncode = returncode
     proc.stdout = _Stdout(lines)
     proc.stderr = AsyncMock()
     proc.stderr.read = AsyncMock(return_value=b"")
     proc.wait = AsyncMock()
+    proc.kill = MagicMock()
     return proc
 
 def _event(type_: str, **kwargs) -> str:
@@ -156,7 +166,8 @@ async def test_run_turn_passes_model_to_cmd(tmp_path: Path):
         "type": "result", "subtype": "success", "result": "Done",
         "usage": {"input_tokens": 1, "output_tokens": 1},
     })
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec, \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
         await _runner().run_turn(tmp_path, "prompt", False, model="claude-haiku-4-5-20251001")
     cmd_args = mock_exec.call_args[0]
     assert "--model" in cmd_args
@@ -170,7 +181,8 @@ async def test_run_turn_uses_large_stream_limit(tmp_path: Path):
         "type": "result", "subtype": "success", "result": "done",
         "usage": {"input_tokens": 1, "output_tokens": 1},
     })
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec, \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
         await _runner().run_turn(tmp_path, "prompt", False)
     assert mock_exec.call_args.kwargs.get("limit") == 8 * 1024 * 1024
 
@@ -197,3 +209,133 @@ async def test_run_turn_large_line_succeeds(tmp_path: Path):
     with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
         result = await _runner().run_turn(tmp_path, "prompt", False)
     assert result.success
+
+
+# ---------------------------------------------------------------------------
+# Stall detection
+# ---------------------------------------------------------------------------
+
+def _stall_config(stall_ms: int = 50, grace_ms: int = 50, heartbeat_s: float = 0.02) -> CodexConfig:
+    return CodexConfig(
+        stall_timeout_ms=stall_ms,
+        stall_grace_period_ms=grace_ms,
+        stall_heartbeat_s=heartbeat_s,
+    )
+
+
+def _make_blocking_proc():
+    class _BlockingStdout:
+        async def readline(self) -> bytes:
+            await asyncio.sleep(1000)
+            return b""
+
+    proc = MagicMock()
+    proc.stdout = _BlockingStdout()
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+    proc.kill = MagicMock()
+    proc.returncode = -9
+    return proc
+
+
+@pytest.mark.asyncio
+async def test_stall_terminates_with_no_progress(tmp_path: Path):
+    proc = _make_blocking_proc()
+    no_progress = WorkspaceState(uncommitted_files=0, commits_since_start=0, status_summary="")
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)), \
+         patch("scale.agent.claude.gather_workspace_state", AsyncMock(return_value=no_progress)):
+        result = await ClaudeRunner(_stall_config()).run_turn(tmp_path, "prompt", False)
+
+    assert not result.success
+    assert "Stall" in result.message
+    assert result.stall_info is not None
+    assert not result.stall_info.has_progress
+    proc.kill.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_stall_emits_stall_event(tmp_path: Path):
+    proc = _make_blocking_proc()
+    no_progress = WorkspaceState(uncommitted_files=0, commits_since_start=0, status_summary="")
+    events: list[dict] = []
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)), \
+         patch("scale.agent.claude.gather_workspace_state", AsyncMock(return_value=no_progress)):
+        await ClaudeRunner(_stall_config()).run_turn(tmp_path, "prompt", False, on_event=events.append)
+
+    stall_events = [e for e in events if e.get("type") == "scale:stall"]
+    assert len(stall_events) == 1
+    assert "elapsed_s" in stall_events[0]
+    assert "uncommitted_files" in stall_events[0]
+
+
+@pytest.mark.asyncio
+async def test_stall_emits_heartbeat_events(tmp_path: Path):
+    proc = _make_blocking_proc()
+    no_progress = WorkspaceState(uncommitted_files=0, commits_since_start=0, status_summary="")
+    events: list[dict] = []
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)), \
+         patch("scale.agent.claude.gather_workspace_state", AsyncMock(return_value=no_progress)):
+        await ClaudeRunner(_stall_config(stall_ms=200, heartbeat_s=0.02)).run_turn(
+            tmp_path, "prompt", False, on_event=events.append
+        )
+
+    heartbeats = [e for e in events if e.get("type") == "scale:heartbeat"]
+    assert len(heartbeats) >= 1
+
+
+@pytest.mark.asyncio
+async def test_stall_grants_grace_period_when_progress(tmp_path: Path):
+    proc = _make_blocking_proc()
+    with_progress = WorkspaceState(uncommitted_files=3, commits_since_start=1, status_summary="M foo.py")
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)), \
+         patch("scale.agent.claude.gather_workspace_state", AsyncMock(return_value=with_progress)):
+        result = await ClaudeRunner(_stall_config(stall_ms=50, grace_ms=50)).run_turn(
+            tmp_path, "prompt", False
+        )
+
+    assert not result.success
+    assert "grace period" in result.message.lower()
+    assert result.stall_info is not None
+    assert result.stall_info.has_progress
+    proc.kill.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_stall_stall_event_includes_grace_period_flag(tmp_path: Path):
+    proc = _make_blocking_proc()
+    with_progress = WorkspaceState(uncommitted_files=2, commits_since_start=0, status_summary="M bar.py")
+    events: list[dict] = []
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)), \
+         patch("scale.agent.claude.gather_workspace_state", AsyncMock(return_value=with_progress)):
+        await ClaudeRunner(_stall_config()).run_turn(tmp_path, "prompt", False, on_event=events.append)
+
+    stall_events = [e for e in events if e.get("type") == "scale:stall"]
+    assert stall_events[0]["grace_period"] is True
+    assert stall_events[0]["uncommitted_files"] == 2
+
+
+@pytest.mark.asyncio
+async def test_normal_turn_not_affected_by_stall_config(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "Done",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    })
+    proc = _make_proc([event])
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        result = await ClaudeRunner(_stall_config(stall_ms=5000)).run_turn(tmp_path, "prompt", False)
+
+    assert result.success
+    assert result.stall_info is None
