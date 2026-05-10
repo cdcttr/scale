@@ -44,6 +44,8 @@ class CodexConfig(BaseModel):
     turn_timeout_ms: int = 3_600_000
     read_timeout_ms: int = 5_000
     stall_timeout_ms: int = 300_000
+    stall_grace_period_ms: int = 300_000
+    stall_heartbeat_s: float = 60.0
 
 
 class ServerConfig(BaseModel):

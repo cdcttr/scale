@@ -312,6 +312,14 @@ class Orchestrator:
                         usage.get("output_tokens", 0)
                         + usage.get("cache_creation_input_tokens", 0)
                     )
+                elif event.get("type") == "scale:stall":
+                    session.stall_info = {
+                        "elapsed_s": event.get("elapsed_s"),
+                        "uncommitted_files": event.get("uncommitted_files"),
+                        "commits_since_start": event.get("commits_since_start"),
+                        "status_summary": event.get("status_summary"),
+                        "grace_period": event.get("grace_period"),
+                    }
 
         try:
             worker = self._make_worker()
@@ -372,6 +380,8 @@ class Orchestrator:
             "success": success,
             "timestamp": timestamp,
         }
+        if session.stall_info is not None:
+            stats["stall"] = session.stall_info
 
         def _fmt_tokens(n: int) -> str:
             return f"{n / 1000:.1f}k" if n >= 1000 else str(n)

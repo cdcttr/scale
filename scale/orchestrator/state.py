@@ -26,6 +26,7 @@ class LiveSession:
     tokens: TokenTotals = field(default_factory=TokenTotals)
     session_id: str = ""
     finishing: bool = False
+    stall_info: dict | None = None
 
 
 @dataclass
