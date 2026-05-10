@@ -86,7 +86,7 @@ async def test_token_totals_accumulated_on_success():
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         if on_event:
             on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
@@ -123,7 +123,7 @@ async def test_token_totals_accumulate_across_sessions():
         orch._state.claimed.add(issue.id)
         inp_cap, out_cap = inp, out
 
-        async def _mock_run(iss, cfg, attempt, on_event=None, _i=inp_cap, _o=out_cap):
+        async def _mock_run(iss, cfg, attempt, on_event=None, _i=inp_cap, _o=out_cap, previous_attempt_summary=None):
             if on_event:
                 on_event({"type": "assistant", "message": {"usage": {"input_tokens": _i, "output_tokens": _o}}})
 
@@ -373,7 +373,7 @@ async def test_on_event_accumulates_tokens_across_multiple_assistant_events():
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         if on_event:
             on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
             on_event({"type": "assistant", "message": {"usage": {"input_tokens": 200, "output_tokens": 80}}})
@@ -403,7 +403,7 @@ async def test_on_event_increments_turn_count_on_assistant():
     issue = _issue()
     captured_turn_counts: list[int] = []
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         if on_event:
             on_event({"type": "assistant"})
             s = orch._state.running.get(issue.id)
@@ -438,7 +438,7 @@ async def test_on_event_accumulates_tokens_from_assistant_event_including_cache(
     issue = _issue()
     captured_tokens: list[tuple[int, int]] = []
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         if on_event:
             on_event({
                 "type": "assistant",
@@ -737,7 +737,7 @@ async def test_run_worker_sets_finishing_on_success():
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         pass
 
     task = asyncio.create_task(asyncio.sleep(0))
@@ -766,7 +766,7 @@ async def test_completed_session_appended_on_success():
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         if on_event:
             on_event({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}})
 
@@ -800,7 +800,7 @@ async def test_total_completed_incremented_on_success():
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         pass
 
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1060,7 +1060,7 @@ async def test_record_stats_called_on_worker_success(tmp_path):
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         pass
 
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1094,7 +1094,7 @@ async def test_record_stats_called_on_worker_failure(tmp_path):
     orch = Orchestrator(_config(), tracker)
     issue = _issue()
 
-    async def _mock_run_fail(iss, cfg, attempt, on_event=None):
+    async def _mock_run_fail(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
         raise RuntimeError("agent crashed")
 
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1132,3 +1132,232 @@ async def test_record_stats_github_failure_does_not_crash(tmp_path):
         await orch._record_stats(issue, session, success=True, attempt=None)  # must not raise
 
     assert stats_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Attempt summary
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fetch_previous_attempt_summary_returns_latest_summary_comment():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    orch._github = AsyncMock()
+    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+        {"body": "Some other comment"},
+        {"body": "<!-- scale-attempt-summary -->\n\n## Scale attempt 1 summary\nFiles: foo.py"},
+    ])
+
+    result = await orch._fetch_previous_attempt_summary(issue)
+
+    assert result is not None
+    assert "scale-attempt-summary" in result
+    assert "foo.py" in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_previous_attempt_summary_returns_none_when_no_summary():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    orch._github = AsyncMock()
+    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+        {"body": "Just a regular comment"},
+    ])
+
+    result = await orch._fetch_previous_attempt_summary(issue)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_previous_attempt_summary_returns_most_recent():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    orch._github = AsyncMock()
+    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+        {"body": "<!-- scale-attempt-summary -->\nAttempt 1: modified alpha.py"},
+        {"body": "<!-- scale-attempt-summary -->\nAttempt 2: modified beta.py"},
+    ])
+
+    result = await orch._fetch_previous_attempt_summary(issue)
+
+    assert result is not None
+    assert "beta.py" in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_previous_attempt_summary_handles_github_error():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    orch._github = AsyncMock()
+    orch._github.fetch_issue_comments = AsyncMock(side_effect=RuntimeError("network"))
+
+    result = await orch._fetch_previous_attempt_summary(issue)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_post_attempt_summary_posts_comment_with_marker():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+    session.turn_count = 3
+
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock()
+
+    with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
+        "modified_files": ["scale/foo.py"],
+        "new_files": [],
+        "commits": ["abc1234 Add feature"],
+    })):
+        await orch._post_attempt_summary(issue, session, attempt=None)
+
+    orch._github.post_comment.assert_called_once()
+    body = orch._github.post_comment.call_args[0][1]
+    assert "<!-- scale-attempt-summary -->" in body
+    assert "scale/foo.py" in body
+    assert "abc1234" in body
+
+
+@pytest.mark.asyncio
+async def test_post_attempt_summary_handles_missing_workspace():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock()
+
+    with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
+        "modified_files": [],
+        "new_files": [],
+        "commits": [],
+    })):
+        await orch._post_attempt_summary(issue, session, attempt=None)
+
+    orch._github.post_comment.assert_called_once()
+    body = orch._github.post_comment.call_args[0][1]
+    assert "<!-- scale-attempt-summary -->" in body
+
+
+@pytest.mark.asyncio
+async def test_post_attempt_summary_github_failure_does_not_raise():
+    orch = Orchestrator(_config(), AsyncMock())
+    issue = _issue()
+    task = asyncio.create_task(asyncio.sleep(0))
+    session = LiveSession(issue=issue, task=task)
+
+    orch._github = AsyncMock()
+    orch._github.post_comment = AsyncMock(side_effect=RuntimeError("network"))
+
+    with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
+        "modified_files": [],
+        "new_files": [],
+        "commits": [],
+    })):
+        await orch._post_attempt_summary(issue, session, attempt=None)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_run_worker_passes_previous_summary_on_retry(tmp_path):
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    received: list[dict] = []
+
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
+        received.append({"previous_attempt_summary": previous_attempt_summary})
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()), \
+         patch.object(orch, "_fetch_previous_attempt_summary",
+                      AsyncMock(return_value="Previous: foo.py modified")), \
+         patch("scale.orchestrator.core.Path", return_value=stats_file):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=2)
+
+    assert len(received) == 1
+    assert received[0]["previous_attempt_summary"] == "Previous: foo.py modified"
+
+
+@pytest.mark.asyncio
+async def test_run_worker_no_previous_summary_on_first_attempt(tmp_path):
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    received: list[dict] = []
+
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
+        received.append({"previous_attempt_summary": previous_attempt_summary})
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch._github, "add_labels", AsyncMock()), \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
+         patch.object(orch._workspace, "remove", AsyncMock()), \
+         patch("scale.orchestrator.core.Path", return_value=stats_file):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    assert len(received) == 1
+    assert received[0]["previous_attempt_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_worker_posts_attempt_summary_on_failure(tmp_path):
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
+
+    async def _mock_run_fail(iss, cfg, attempt, on_event=None, previous_attempt_summary=None):
+        raise RuntimeError("agent crashed")
+
+    task = asyncio.create_task(asyncio.sleep(0))
+    orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
+    orch._state.claimed.add(issue.id)
+
+    post_summary_mock = AsyncMock()
+    stats_file = tmp_path / "stats.jsonl"
+
+    with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
+         patch.object(orch, "_post_attempt_summary", post_summary_mock), \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
+         patch("scale.orchestrator.core.Path", return_value=stats_file):
+        mock_w = MagicMock()
+        mock_w.run = _mock_run_fail
+        MockWorker.return_value = mock_w
+        await orch._run_worker(issue, attempt=None)
+
+    post_summary_mock.assert_called_once()

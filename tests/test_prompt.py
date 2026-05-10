@@ -51,3 +51,18 @@ def test_render_unknown_variable_raises():
     template = "{{ unknown_var }}"
     with pytest.raises(Exception):
         render_prompt(template, _issue(), attempt=None)
+
+def test_render_previous_attempt_summary_injected():
+    template = "{{ previous_attempt_summary }}"
+    result = render_prompt(template, _issue(), attempt=2, previous_attempt_summary="Files changed: foo.py")
+    assert "Files changed: foo.py" in result
+
+def test_render_previous_attempt_summary_defaults_to_empty_string():
+    template = "Summary: '{{ previous_attempt_summary }}'"
+    result = render_prompt(template, _issue(), attempt=None)
+    assert "Summary: ''" in result
+
+def test_render_previous_attempt_summary_usable_in_attempt_block():
+    template = "{% if attempt %}prev: {{ previous_attempt_summary }}{% endif %}done"
+    result = render_prompt(template, _issue(), attempt=1, previous_attempt_summary="modified foo.py")
+    assert "prev: modified foo.py" in result
