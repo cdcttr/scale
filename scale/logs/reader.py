@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 from typing import Generator
 
@@ -13,22 +14,43 @@ def _key_input(inp: dict) -> str:
     return str(next(iter(inp.values()))) if inp else ""
 
 
-def _format_event(event: dict, turn: int) -> list[str]:
+def _fmt_prefix(elapsed_s: float | None, total_tokens: int) -> str:
+    time_str = f"{int(elapsed_s):>3}s" if elapsed_s is not None else " ---"
+    tokens_k = f"{total_tokens / 1000:.1f}k"
+    return f"  {time_str}  {tokens_k:>6} tokens  "
+
+
+def _format_event(
+    event: dict,
+    turn: int,
+    elapsed_s: float | None = None,
+    total_s: float | None = None,
+) -> list[str]:
     etype = event.get("type")
 
     if etype == "assistant":
         message = event.get("message", {})
         content = message.get("content", [])
-        lines = []
+        usage = message.get("usage") or {}
+        total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        prefix = _fmt_prefix(elapsed_s, total_tokens)
+        pad = " " * len(prefix)
+
+        lines: list[str] = []
+        first = True
         for item in content:
             if item.get("type") == "text":
                 text = item["text"].strip()
                 if text:
-                    lines.append(f"[turn {turn}] TEXT  {text}")
+                    p = prefix if first else pad
+                    lines.append(f"[turn {turn}]{p}TEXT  {text}")
+                    first = False
             elif item.get("type") == "tool_use":
                 name = item.get("name", "")
                 detail = _key_input(item.get("input") or {})
-                lines.append(f"[turn {turn}] TOOL  {name} — {detail}")
+                p = prefix if first else pad
+                lines.append(f"[turn {turn}]{p}TOOL  {name} — {detail}")
+                first = False
         return lines
 
     if etype == "result":
@@ -39,7 +61,10 @@ def _format_event(event: dict, turn: int) -> list[str]:
         out_tokens = usage.get("output_tokens", 0)
         in_k = f"{in_tokens / 1000:.1f}k"
         out_k = f"{out_tokens / 1000:.1f}k"
-        return [f"[result] {subtype} after {num_turns} turns, {in_k} tokens in, {out_k} tokens out"]
+        base = f"[result] {subtype} after {num_turns} turns, {in_k} tokens in, {out_k} tokens out"
+        if total_s is not None:
+            return [f"{base}, {int(total_s)}s total"]
+        return [base]
 
     return []
 
@@ -84,6 +109,8 @@ class LogReader:
     async def tail(self, workspace_dir: Path | None = None) -> None:
         turn = 0
         seen_bytes = 0
+        session_start = time.monotonic()
+        last_turn_time = session_start
 
         while True:
             if workspace_dir is not None and not workspace_dir.exists():
@@ -109,10 +136,14 @@ class LogReader:
                 etype = event.get("type")
                 if etype == "assistant":
                     turn += 1
-                    for line in _format_event(event, turn):
+                    now = time.monotonic()
+                    elapsed_s = now - last_turn_time
+                    last_turn_time = now
+                    for line in _format_event(event, turn, elapsed_s=elapsed_s):
                         print(line)
                 elif etype == "result":
-                    for line in _format_event(event, turn):
+                    total_s = time.monotonic() - session_start
+                    for line in _format_event(event, turn, total_s=total_s):
                         print(line)
                     done = True
 

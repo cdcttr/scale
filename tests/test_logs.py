@@ -3,7 +3,7 @@ import json
 import pytest
 from pathlib import Path
 
-from scale.logs.reader import LogReader, _format_event, _key_input
+from scale.logs.reader import LogReader, _format_event, _fmt_prefix, _key_input
 
 
 # --- _key_input ---
@@ -38,14 +38,21 @@ def test_key_input_empty_returns_empty():
 
 # --- _format_event ---
 
-def _assistant(content: list[dict]) -> dict:
-    return {"type": "assistant", "message": {"content": content}}
+def _assistant(content: list[dict], usage: dict | None = None) -> dict:
+    msg: dict = {"content": content}
+    if usage is not None:
+        msg["usage"] = usage
+    return {"type": "assistant", "message": msg}
+
+
+_NO_TIME_NO_TOKENS = _fmt_prefix(None, 0)
+_PAD = " " * len(_NO_TIME_NO_TOKENS)
 
 
 def test_format_text_block():
     event = _assistant([{"type": "text", "text": "Hello world"}])
     lines = _format_event(event, turn=1)
-    assert lines == ["[turn 1] TEXT  Hello world"]
+    assert lines == [f"[turn 1]{_NO_TIME_NO_TOKENS}TEXT  Hello world"]
 
 
 def test_format_empty_text_block_skipped():
@@ -57,13 +64,13 @@ def test_format_empty_text_block_skipped():
 def test_format_tool_use_bash():
     event = _assistant([{"type": "tool_use", "name": "Bash", "input": {"command": "uv run pytest -q"}}])
     lines = _format_event(event, turn=2)
-    assert lines == ["[turn 2] TOOL  Bash — uv run pytest -q"]
+    assert lines == [f"[turn 2]{_NO_TIME_NO_TOKENS}TOOL  Bash — uv run pytest -q"]
 
 
 def test_format_tool_use_read():
     event = _assistant([{"type": "tool_use", "name": "Read", "input": {"file_path": "scale/main.py"}}])
     lines = _format_event(event, turn=1)
-    assert lines == ["[turn 1] TOOL  Read — scale/main.py"]
+    assert lines == [f"[turn 1]{_NO_TIME_NO_TOKENS}TOOL  Read — scale/main.py"]
 
 
 def test_format_multiple_content_items():
@@ -73,8 +80,8 @@ def test_format_multiple_content_items():
     ])
     lines = _format_event(event, turn=3)
     assert lines == [
-        "[turn 3] TOOL  Bash — ls",
-        "[turn 3] TEXT  Done",
+        f"[turn 3]{_NO_TIME_NO_TOKENS}TOOL  Bash — ls",
+        f"[turn 3]{_PAD}TEXT  Done",
     ]
 
 
@@ -168,8 +175,8 @@ def test_log_reader_turn_numbers_increment(tmp_path):
     log = _make_log(tmp_path, events)
     reader = LogReader(log)
     lines = list(reader.iter_formatted())
-    assert any("[turn 1] TEXT  Step one" in l for l in lines)
-    assert any("[turn 2] TEXT  Step two" in l for l in lines)
+    assert any("[turn 1]" in l and "TEXT  Step one" in l for l in lines)
+    assert any("[turn 2]" in l and "TEXT  Step two" in l for l in lines)
 
 
 def test_log_reader_missing_file_raises(tmp_path):
@@ -249,3 +256,111 @@ def test_logs_parser_defaults_no_flags():
     args = _build_parser().parse_args(["logs", "57"])
     assert args.all is False
     assert args.archived is False
+
+
+# --- token extraction and prefix formatting ---
+
+def test_fmt_prefix_static_no_tokens():
+    prefix = _fmt_prefix(None, 0)
+    assert " ---" in prefix
+    assert "0.0k tokens" in prefix
+
+
+def test_fmt_prefix_live_elapsed_and_tokens():
+    prefix = _fmt_prefix(12.0, 2100)
+    assert "12s" in prefix
+    assert "2.1k tokens" in prefix
+
+
+def test_fmt_prefix_consistent_width():
+    assert len(_fmt_prefix(None, 0)) == len(_fmt_prefix(8.0, 500))
+    assert len(_fmt_prefix(None, 0)) == len(_fmt_prefix(99.0, 14200))
+
+
+def test_format_event_extracts_tokens_from_message_usage():
+    event = _assistant(
+        [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
+        usage={"input_tokens": 1000, "output_tokens": 500},
+    )
+    lines = _format_event(event, turn=1)
+    assert len(lines) == 1
+    assert "1.5k tokens" in lines[0]
+
+
+def test_format_event_elapsed_appears_on_first_line_only():
+    event = _assistant(
+        [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "text", "text": "Done"},
+        ],
+        usage={"input_tokens": 800, "output_tokens": 200},
+    )
+    lines = _format_event(event, turn=1, elapsed_s=8.0)
+    assert len(lines) == 2
+    assert "8s" in lines[0]
+    assert "1.0k tokens" in lines[0]
+    assert "8s" not in lines[1]
+    assert "tokens" not in lines[1]
+
+
+def test_format_event_static_shows_dashes_for_time():
+    event = _assistant([{"type": "text", "text": "Hello"}])
+    lines = _format_event(event, turn=1, elapsed_s=None)
+    assert " ---" in lines[0]
+
+
+def test_format_result_with_total_wall_time():
+    event = {
+        "type": "result",
+        "subtype": "success",
+        "num_turns": 2,
+        "usage": {"input_tokens": 12400, "output_tokens": 3100},
+    }
+    lines = _format_event(event, turn=2, total_s=94.3)
+    assert len(lines) == 1
+    assert lines[0].endswith(", 94s total")
+
+
+def test_format_result_without_total_wall_time():
+    event = {
+        "type": "result",
+        "subtype": "success",
+        "num_turns": 2,
+        "usage": {"input_tokens": 12400, "output_tokens": 3100},
+    }
+    lines = _format_event(event, turn=2)
+    assert len(lines) == 1
+    assert "total" not in lines[0]
+
+
+def test_log_reader_static_shows_dashes_for_time(tmp_path):
+    events = [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
+                "usage": {"input_tokens": 500, "output_tokens": 200},
+            },
+        },
+        {"type": "result", "subtype": "success", "num_turns": 1,
+         "usage": {"input_tokens": 500, "output_tokens": 200}},
+    ]
+    log = _make_log(tmp_path, events)
+    reader = LogReader(log)
+    lines = list(reader.iter_formatted())
+    tool_line = next(l for l in lines if "TOOL" in l)
+    assert " ---" in tool_line
+    assert "0.7k tokens" in tool_line
+
+
+def test_log_reader_static_result_has_no_total_time(tmp_path):
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}},
+        {"type": "result", "subtype": "success", "num_turns": 1,
+         "usage": {"input_tokens": 100, "output_tokens": 50}},
+    ]
+    log = _make_log(tmp_path, events)
+    reader = LogReader(log)
+    lines = list(reader.iter_formatted())
+    result_line = next(l for l in lines if "[result]" in l)
+    assert "total" not in result_line
