@@ -82,6 +82,8 @@ class Orchestrator:
         tasks = [asyncio.create_task(self._tick_loop())]
         if self._config.planner:
             tasks.append(asyncio.create_task(self._watch_planned()))
+        if self._config.review:
+            tasks.append(asyncio.create_task(self._watch_merge_queue()))
         await asyncio.gather(*tasks)
 
     async def _tick_loop(self) -> None:
@@ -169,6 +171,8 @@ class Orchestrator:
                 async with self._lock:
                     for issue in pr_open_issues:
                         if issue.id not in self._state.claimed:
+                            if self._config.agent.supervised_label in (issue.labels or []):
+                                continue
                             self._state.claimed.add(issue.id)
                             asyncio.create_task(self._run_reviewer(issue))
             except Exception as e:
@@ -323,8 +327,15 @@ class Orchestrator:
                 self._state.claimed.discard(issue.id)
             if session:
                 await self._record_stats(issue, session, success=True, attempt=attempt)
+            is_supervised = self._config.agent.supervised_label in (issue.labels or [])
             if self._config.review:
                 await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
+            elif self._config.agent.auto_merge and not is_supervised:
+                pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+                if pr is not None:
+                    await self._try_auto_merge(issue, pr["number"])
+                if self._config.tracker.terminal_labels:
+                    await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             elif self._config.tracker.terminal_labels:
                 await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             asyncio.create_task(self._workspace.remove(issue))
@@ -433,6 +444,8 @@ class Orchestrator:
             pr_diff = await self._github.fetch_pr_diff(pr_number)
             worker = ReviewWorker(self._config)
             await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
+            if self._config.agent.auto_merge:
+                await self._try_auto_merge(issue, pr_number)
             if self._config.tracker.terminal_labels:
                 await self._github.add_labels(
                     issue.number, [self._config.tracker.terminal_labels[0]]
@@ -453,6 +466,78 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("watch_planned tick failed: %s", e)
             await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _try_auto_merge(self, issue: Issue, pr_number: int) -> None:
+        for _ in range(10):
+            checks = await self._github.fetch_pr_checks(pr_number)
+            if not checks:
+                await self._github.merge_pr(pr_number)
+                return
+            all_done = all(c.get("status") == "completed" for c in checks)
+            if all_done:
+                all_pass = all(
+                    c.get("conclusion") in ("success", "skipped", "neutral")
+                    for c in checks
+                )
+                if all_pass:
+                    await self._github.merge_pr(pr_number)
+                else:
+                    logger.warning(
+                        "CI checks failed for PR #%d on issue #%d, leaving PR open",
+                        pr_number, issue.number,
+                    )
+                return
+            await asyncio.sleep(30)
+        logger.warning(
+            "CI checks timed out for PR #%d on issue #%d, leaving PR open",
+            pr_number, issue.number,
+        )
+
+    async def _watch_merge_queue(self) -> None:
+        while True:
+            try:
+                await self._watch_merge_queue_tick()
+            except Exception as e:
+                logger.warning("watch_merge_queue tick failed: %s", e)
+            await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _watch_merge_queue_tick(self) -> None:
+        if not self._config.review:
+            return
+        review = self._config.review
+        pr_open_issues = await self._github.fetch_issues_by_label(review.pr_open_label)
+        async with self._lock:
+            candidates = []
+            for issue in pr_open_issues:
+                if review.merge_label not in (issue.labels or []):
+                    continue
+                if issue.id in self._state.claimed:
+                    continue
+                self._state.claimed.add(issue.id)
+                candidates.append(issue)
+        for issue in candidates:
+            asyncio.create_task(self._merge_issue(issue))
+
+    async def _merge_issue(self, issue: Issue) -> None:
+        assert self._config.review is not None
+        review = self._config.review
+        try:
+            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            if pr is None:
+                logger.warning("No open PR for issue #%d, skipping merge", issue.number)
+                return
+            await self._github.merge_pr(pr["number"])
+            if self._config.tracker.terminal_labels:
+                await self._github.add_labels(
+                    issue.number, [self._config.tracker.terminal_labels[0]]
+                )
+            await self._github.remove_label(issue.number, review.pr_open_label)
+            await self._github.remove_label(issue.number, review.merge_label)
+        except Exception as e:
+            logger.error("Merge failed for issue #%d: %s", issue.number, e)
+        finally:
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
 
     async def _watch_planned_tick(self) -> None:
         if not self._config.planner or not self._planner_runner:
