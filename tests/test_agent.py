@@ -1,11 +1,19 @@
 import asyncio
 import json
+import os
+import signal
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 from scale.agent.claude import ClaudeRunner, parse_stream_event, TurnResult, TokenUsage
 from scale.agent.stall import WorkspaceState
 from scale.config.schema import CodexConfig
+
+
+@pytest.fixture(autouse=True)
+def _patch_killpg(monkeypatch):
+    monkeypatch.setattr("scale.agent.claude.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr("scale.agent.claude.os.killpg", lambda pgid, sig: None)
 
 
 def _runner() -> ClaudeRunner:
@@ -253,7 +261,7 @@ async def test_stall_terminates_with_no_progress(tmp_path: Path):
     assert "Stall" in result.message
     assert result.stall_info is not None
     assert not result.stall_info.has_progress
-    proc.kill.assert_called()
+    proc.wait.assert_called()
 
 
 @pytest.mark.asyncio
@@ -306,7 +314,7 @@ async def test_stall_grants_grace_period_when_progress(tmp_path: Path):
     assert "grace period" in result.message.lower()
     assert result.stall_info is not None
     assert result.stall_info.has_progress
-    proc.kill.assert_called()
+    proc.wait.assert_called()
 
 
 @pytest.mark.asyncio
@@ -339,3 +347,71 @@ async def test_normal_turn_not_affected_by_stall_config(tmp_path: Path):
 
     assert result.success
     assert result.stall_info is None
+
+
+@pytest.mark.asyncio
+async def test_run_turn_uses_start_new_session(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+        await _runner().run_turn(tmp_path, "prompt", False)
+    claude_calls = [c for c in mock_exec.call_args_list if c.args and "claude" in str(c.args[0])]
+    assert claude_calls, "claude subprocess not found in calls"
+    assert claude_calls[0].kwargs.get("start_new_session") is True
+
+
+@pytest.mark.asyncio
+async def test_run_turn_kills_process_group_on_cancellation(tmp_path: Path):
+    async def _hanging_readline():
+        await asyncio.sleep(9999)
+        return b""
+
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.returncode = -9
+    proc.stdout = MagicMock()
+    proc.stdout.readline = _hanging_readline
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        with patch("scale.agent.claude.os.getpgid", return_value=12345):
+            with patch("scale.agent.claude.os.killpg") as mock_killpg:
+                task = asyncio.create_task(_runner().run_turn(tmp_path, "prompt", False))
+                await asyncio.sleep(0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    mock_killpg.assert_called_with(12345, signal.SIGKILL)
+    proc.wait.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_handles_process_already_gone(tmp_path: Path):
+    async def _hanging_readline():
+        await asyncio.sleep(9999)
+        return b""
+
+    proc = MagicMock()
+    proc.pid = 99999
+    proc.returncode = -9
+    proc.stdout = MagicMock()
+    proc.stdout.readline = _hanging_readline
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        with patch("scale.agent.claude.os.getpgid", return_value=99999):
+            with patch("scale.agent.claude.os.killpg", side_effect=ProcessLookupError):
+                task = asyncio.create_task(_runner().run_turn(tmp_path, "prompt", False))
+                await asyncio.sleep(0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    proc.wait.assert_called()
