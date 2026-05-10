@@ -104,6 +104,19 @@ async def _clean(
     await clean(config, dry_run=dry_run, all_workspaces=all_workspaces, yes=yes)
 
 
+async def _init(
+    cwd: Path,
+    with_review: bool,
+    dry_run: bool,
+    force: bool,
+) -> None:
+    from scale.config.schema import CodexConfig
+    from scale.init.runner import InitRunner
+
+    runner = InitRunner(CodexConfig())
+    await runner.run(cwd, with_review=with_review, dry_run=dry_run, force=force)
+
+
 async def _plan(
     workflow_path: Path,
     issue_numbers: list[int],
@@ -141,6 +154,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("version", help="Print version and exit")
+
+    init_p = sub.add_parser("init", help="Generate WORKFLOW.md for the current project")
+    init_p.add_argument(
+        "--with-review",
+        action="store_true",
+        help="Also generate REVIEW.md",
+    )
+    init_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print generated content to stdout, do not write files",
+    )
+    init_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing WORKFLOW.md",
+    )
+    init_p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
 
     triage_p = sub.add_parser("triage", help="Assess issue readiness and apply labels")
     triage_p.add_argument(
@@ -244,7 +279,7 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command not in ("version",):
+    if args.command not in ("version", "init"):
         workflow_path = Path(args.workflow)
         if not workflow_path.exists():
             if args.workflow == "WORKFLOW.md":
@@ -256,6 +291,11 @@ def main() -> None:
             else:
                 print(f"Error: workflow file not found: {args.workflow}", file=sys.stderr)
             sys.exit(1)
+
+    if args.command == "init":
+        _setup_logging(args.log_level)
+        asyncio.run(_init(Path("."), args.with_review, args.dry_run, args.force))
+        return
 
     if args.command == "version":
         from importlib.metadata import version as _pkg_version
