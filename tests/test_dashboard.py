@@ -7,7 +7,7 @@ from rich.console import Console
 
 from scale.dashboard.ui import _ago, _elapsed, _fmt_tokens, _build_table, Dashboard
 from scale.orchestrator.state import (
-    CompletedSession, LiveSession, OrchestratorState, RetryEntry, TokenTotals,
+    CompletedSession, LiveSession, OrchestratorState, RetryEntry, SecondarySession, TokenTotals,
 )
 from scale.tracker.models import Issue
 
@@ -308,6 +308,58 @@ def test_issue_number_cell_has_no_extra_leading_spaces():
     col0_cells = [str(c) for c in table.columns[0]._cells]
     assert "#17" in col0_cells
     assert "  #17" not in col0_cells
+
+
+# ---------------------------------------------------------------------------
+# REVIEWING section
+# ---------------------------------------------------------------------------
+
+def test_build_table_reviewing_section_appears():
+    state = OrchestratorState()
+    state.secondary["i5"] = SecondarySession(issue=_issue(5), kind="review")
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "REVIEWING" in output
+    assert "#5" in output
+    assert "review" in output
+
+
+def test_build_table_no_reviewing_section_when_empty():
+    state = OrchestratorState()
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "REVIEWING" not in output
+
+
+def test_build_table_reviewing_shows_feedback_kind():
+    state = OrchestratorState()
+    state.secondary["i7"] = SecondarySession(issue=_issue(7), kind="feedback")
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "REVIEWING" in output
+    assert "#7" in output
+    assert "feedback" in output
+
+
+def test_build_table_reviewing_shows_elapsed_time():
+    state = OrchestratorState()
+    state.secondary["i3"] = SecondarySession(issue=_issue(3), kind="review")
+
+    console = Console(file=StringIO(), width=200, highlight=False)
+    console.print(_build_table(_orch(state)))
+    output = console.file.getvalue()
+
+    assert "REVIEWING" in output
+    assert "0m" in output or "s" in output
 
 
 def test_title_truncated_at_60_chars():
