@@ -31,6 +31,9 @@ class WorkspaceManager:
             raise ValueError(f"Workspace path escapes root: {path}")
         return path
 
+    def path(self, issue: Issue) -> Path:
+        return self._path(issue)
+
     async def _run_hook(self, script: str, cwd: Path) -> None:
         if not script:
             return

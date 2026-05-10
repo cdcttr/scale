@@ -41,6 +41,7 @@ class SSHWorker(Worker):
         config: WorkflowConfig,
         attempt: Optional[int],
         on_event: Optional[Callable[[dict], None]] = None,
+        previous_attempt_summary: Optional[str] = None,
     ) -> None:
         workspace_path = await self._workspace.prepare(issue)
         await self._workspace.run_before_hook(issue)
@@ -53,7 +54,9 @@ class SSHWorker(Worker):
                 prompt = (
                     _CONTINUATION_PROMPT
                     if is_continuation
-                    else render_prompt(config.prompt_template, issue, attempt)
+                    else render_prompt(
+                        config.prompt_template, issue, attempt, previous_attempt_summary
+                    )
                 )
 
                 local_cmd = runner._build_cmd(prompt, is_continuation)

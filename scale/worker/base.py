@@ -14,5 +14,6 @@ class Worker(ABC):
         config: WorkflowConfig,
         attempt: Optional[int],
         on_event: Optional[Callable[[dict], None]] = None,
+        previous_attempt_summary: Optional[str] = None,
     ) -> None:
         ...
