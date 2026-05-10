@@ -434,7 +434,11 @@ async def test_run_starts_feedback_loop_when_enabled():
     async def _mock_tick():
         await asyncio.sleep(0)
 
+    async def _mock_merge_queue():
+        await asyncio.sleep(0)
+
     with patch.object(orch, "_tick_loop", side_effect=_mock_tick), \
+         patch.object(orch, "_watch_merge_queue", side_effect=_mock_merge_queue), \
          patch.object(orch, "_watch_pr_feedback", side_effect=_mock_feedback):
         await orch.run()
 
@@ -457,7 +461,11 @@ async def test_run_does_not_start_feedback_loop_when_disabled():
     async def _mock_tick():
         await asyncio.sleep(0)
 
+    async def _mock_merge_queue():
+        await asyncio.sleep(0)
+
     with patch.object(orch, "_tick_loop", side_effect=_mock_tick), \
+         patch.object(orch, "_watch_merge_queue", side_effect=_mock_merge_queue), \
          patch.object(orch, "_watch_pr_feedback", side_effect=_mock_feedback):
         await orch.run()
 

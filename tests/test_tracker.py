@@ -293,3 +293,50 @@ async def test_fetch_issues_by_label():
         assert route.calls[0].request.url.params["labels"] == "symphony:planned"
     assert len(results) == 1
     assert results[0].number == 10
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_pr_checks_returns_check_runs():
+    respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(
+        return_value=httpx.Response(200, json={"head": {"sha": "abc123"}})
+    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/abc123/check-runs").mock(
+        return_value=httpx.Response(200, json={
+            "check_runs": [
+                {"id": 1, "status": "completed", "conclusion": "success", "name": "CI"},
+            ]
+        })
+    )
+    gh = GitHubClient(_config())
+    checks = await gh.fetch_pr_checks(7)
+    assert len(checks) == 1
+    assert checks[0]["conclusion"] == "success"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_pr_checks_returns_empty_when_no_runs():
+    respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(
+        return_value=httpx.Response(200, json={"head": {"sha": "abc123"}})
+    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/abc123/check-runs").mock(
+        return_value=httpx.Response(200, json={"check_runs": []})
+    )
+    gh = GitHubClient(_config())
+    checks = await gh.fetch_pr_checks(7)
+    assert checks == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_merge_pr_sends_squash_request():
+    import json as _json
+    route = respx.put("https://api.github.com/repos/owner/repo/pulls/7/merge").mock(
+        return_value=httpx.Response(200, json={"merged": True})
+    )
+    gh = GitHubClient(_config())
+    await gh.merge_pr(7)
+    assert route.called
+    sent = _json.loads(route.calls[0].request.content)
+    assert sent["merge_method"] == "squash"

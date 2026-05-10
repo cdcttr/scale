@@ -263,3 +263,38 @@ class GitHubClient(TrackerClient):
             )
             r.raise_for_status()
             return r.text
+
+    async def fetch_pr_checks(self, pr_number: int) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{self._base}/pulls/{pr_number}",
+                headers=self._headers,
+            )
+            r.raise_for_status()
+            sha = r.json()["head"]["sha"]
+
+            runs: list[dict] = []
+            page = 1
+            while True:
+                r2 = await client.get(
+                    f"{self._base}/commits/{sha}/check-runs",
+                    headers=self._headers,
+                    params={"per_page": 100, "page": page},
+                )
+                r2.raise_for_status()
+                data = r2.json()
+                batch = data.get("check_runs", [])
+                runs.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
+        return runs
+
+    async def merge_pr(self, pr_number: int) -> None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.put(
+                f"{self._base}/pulls/{pr_number}/merge",
+                headers=self._headers,
+                json={"merge_method": "squash"},
+            )
+            r.raise_for_status()
