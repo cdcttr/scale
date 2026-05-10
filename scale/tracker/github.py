@@ -233,6 +233,27 @@ class GitHubClient(TrackerClient):
             prs = r.json()
             return prs[0] if prs else None
 
+    async def fetch_pr_comments(self, pr_number: int, since: Optional[datetime] = None) -> list[dict]:
+        params: dict = {"per_page": 100}
+        if since:
+            params["since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        results: list[dict] = []
+        page = 1
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                r = await client.get(
+                    f"{self._base}/issues/{pr_number}/comments",
+                    headers=self._headers,
+                    params={**params, "page": page},
+                )
+                r.raise_for_status()
+                data = r.json()
+                if not data:
+                    break
+                results.extend(data)
+                page += 1
+        return results
+
     async def fetch_pr_diff(self, pr_number: int) -> str:
         diff_headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
         async with httpx.AsyncClient(timeout=30) as client:

@@ -53,3 +53,4 @@ class OrchestratorState:
     completed: list[CompletedSession] = field(default_factory=list)
     token_totals: TokenTotals = field(default_factory=TokenTotals)
     total_completed: int = 0
+    pr_comment_watermarks: dict[int, datetime] = field(default_factory=dict)
