@@ -14,6 +14,7 @@ from scale.orchestrator.state import (
 from scale.tracker.base import TrackerClient
 from scale.tracker.github import GitHubClient
 from scale.tracker.models import Issue
+from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
@@ -82,6 +83,8 @@ class Orchestrator:
         tasks = [asyncio.create_task(self._tick_loop())]
         if self._config.planner:
             tasks.append(asyncio.create_task(self._watch_planned()))
+        if self._config.review and self._config.review.feedback_enabled:
+            tasks.append(asyncio.create_task(self._watch_pr_feedback()))
         await asyncio.gather(*tasks)
 
     async def _tick_loop(self) -> None:
@@ -453,6 +456,65 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("watch_planned tick failed: %s", e)
             await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _watch_pr_feedback(self) -> None:
+        while True:
+            try:
+                await self._watch_pr_feedback_tick()
+            except Exception as e:
+                logger.warning("watch_pr_feedback tick failed: %s", e)
+            await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _watch_pr_feedback_tick(self) -> None:
+        assert self._config.review is not None
+        review = self._config.review
+
+        pr_open_issues = await self._github.fetch_issues_by_label(review.pr_open_label)
+
+        for issue in pr_open_issues:
+            async with self._lock:
+                if issue.id in self._state.claimed:
+                    continue
+
+            if issue.number not in self._state.pr_comment_watermarks:
+                self._state.pr_comment_watermarks[issue.number] = datetime.now(tz=timezone.utc)
+                continue
+
+            watermark = self._state.pr_comment_watermarks[issue.number]
+            try:
+                comments = await self._github.fetch_pr_comments(issue.number, since=watermark)
+            except Exception as e:
+                logger.warning("Failed to fetch PR comments for issue #%d: %s", issue.number, e)
+                continue
+
+            human_comments = [
+                c for c in comments
+                if "<!-- scale-stats" not in c.get("body", "")
+            ]
+
+            if not human_comments:
+                continue
+
+            async with self._lock:
+                self._state.claimed.add(issue.id)
+            asyncio.create_task(self._run_feedback_worker(issue, human_comments))
+
+    async def _run_feedback_worker(self, issue: Issue, comments: list[dict]) -> None:
+        try:
+            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            if pr is None:
+                logger.warning("No open PR found for issue #%d, skipping feedback", issue.number)
+                return
+            pr_diff = await self._github.fetch_pr_diff(pr["number"])
+            worker = FeedbackWorker(self._workspace, self._config)
+            await worker.run(issue, pr_diff=pr_diff, pr_comments=comments)
+            logger.info("Feedback worker completed for issue #%d", issue.number)
+        except Exception as e:
+            logger.error("Feedback worker failed for issue #%d: %s", issue.number, e)
+        finally:
+            self._state.pr_comment_watermarks[issue.number] = datetime.now(tz=timezone.utc)
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
 
     async def _watch_planned_tick(self) -> None:
         if not self._config.planner or not self._planner_runner:

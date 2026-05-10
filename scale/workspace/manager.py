@@ -5,6 +5,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from scale.config.schema import WorkflowConfig
 from scale.tracker.models import Issue
@@ -59,10 +60,11 @@ class WorkspaceManager:
             await self._run_hook(self._hooks.after_create, path)
         return path
 
-    async def run_before_hook(self, issue: Issue) -> None:
+    async def run_before_hook(self, issue: Issue, script_override: Optional[str] = None) -> None:
         path = self._path(issue)
-        if self._hooks.before_run:
-            await self._run_hook(self._hooks.before_run, path)
+        script = script_override if script_override is not None else self._hooks.before_run
+        if script:
+            await self._run_hook(script, path)
 
     async def run_after_hook(self, issue: Issue) -> None:
         path = self._path(issue)

@@ -82,6 +82,7 @@ class ReviewConfig(BaseModel):
     needs_revision_label: str = "scale:needs-revision"
     conflict_label: str = "scale:conflict"
     template: str = ""
+    feedback_enabled: bool = False
 
 
 class WorkflowConfig(BaseModel):
