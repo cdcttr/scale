@@ -296,7 +296,117 @@ class Orchestrator:
                     ))
                     self._state.total_completed += 1
 
+    async def _collect_workspace_state(self, workspace_path: Path) -> dict:
+        result: dict = {"modified_files": [], "new_files": [], "commits": []}
+        if not workspace_path.exists():
+            return result
+
+        async def _git(*args: str) -> str:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git", *args,
+                    cwd=str(workspace_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+                return stdout.decode().strip()
+            except Exception:
+                return ""
+
+        diff = await _git("diff", "--name-only", "origin/main..HEAD")
+        if diff:
+            result["modified_files"] = [f for f in diff.splitlines() if f]
+
+        status = await _git("status", "--porcelain")
+        if status:
+            result["new_files"] = [
+                line[3:] for line in status.splitlines() if line.startswith("?? ")
+            ]
+
+        log = await _git("log", "--oneline", "origin/main..HEAD")
+        if log:
+            result["commits"] = [l for l in log.splitlines() if l]
+
+        return result
+
+    async def _post_attempt_summary(
+        self,
+        issue: Issue,
+        session: LiveSession,
+        attempt: Optional[int],
+    ) -> None:
+        workspace_path = self._workspace.path(issue)
+        try:
+            state = await self._collect_workspace_state(workspace_path)
+        except Exception as exc:
+            logger.warning("Failed to collect workspace state for summary: %s", exc)
+            state = {"modified_files": [], "new_files": [], "commits": []}
+
+        attempt_num = (attempt or 0) + 1
+
+        def _fmt(n: int) -> str:
+            return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+        lines = [
+            "<!-- scale-attempt-summary -->",
+            "",
+            f"## Scale attempt {attempt_num} summary",
+            "",
+            f"- **Turns completed:** {session.turn_count}",
+            f"- **Tokens in:** {_fmt(session.tokens.input_tokens)}"
+            f"  |  **Tokens out:** {_fmt(session.tokens.output_tokens)}",
+            "",
+        ]
+
+        if state["commits"]:
+            lines += ["### Commits", "```"]
+            lines.extend(state["commits"])
+            lines += ["```", ""]
+        else:
+            lines += ["### Commits", "_No commits made._", ""]
+
+        if state["modified_files"]:
+            lines += ["### Files modified"]
+            for f in state["modified_files"]:
+                lines.append(f"- `{f}`")
+            lines.append("")
+
+        if state["new_files"]:
+            lines += ["### Files created (untracked)"]
+            for f in state["new_files"]:
+                lines.append(f"- `{f}`")
+            lines.append("")
+
+        if not state["modified_files"] and not state["new_files"] and not state["commits"]:
+            lines += ["_No file changes detected._", ""]
+
+        comment = "\n".join(lines)
+        try:
+            await self._github.post_comment(issue.number, comment)
+        except Exception as exc:
+            logger.warning(
+                "Failed to post attempt summary for issue #%d: %s", issue.number, exc
+            )
+
+    async def _fetch_previous_attempt_summary(self, issue: Issue) -> Optional[str]:
+        try:
+            comments = await self._github.fetch_issue_comments(issue.number)
+            for comment in reversed(comments):
+                if "<!-- scale-attempt-summary -->" in comment.get("body", ""):
+                    return comment["body"]
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch previous attempt summary for issue #%d: %s",
+                issue.number, exc,
+            )
+        return None
+
     async def _run_worker(self, issue: Issue, attempt: Optional[int]) -> None:
+        previous_attempt_summary: Optional[str] = None
+        if attempt:
+            previous_attempt_summary = await self._fetch_previous_attempt_summary(issue)
+
         def on_event(event: dict) -> None:
             session = self._state.running.get(issue.id)
             if session:
@@ -315,7 +425,11 @@ class Orchestrator:
 
         try:
             worker = self._make_worker()
-            await worker.run(issue, self._config, attempt, on_event=on_event)
+            await worker.run(
+                issue, self._config, attempt,
+                on_event=on_event,
+                previous_attempt_summary=previous_attempt_summary,
+            )
             async with self._lock:
                 session = self._state.running.get(issue.id)
                 if session:
@@ -334,6 +448,8 @@ class Orchestrator:
                 if session:
                     self._state.token_totals.input_tokens += session.tokens.input_tokens
                     self._state.token_totals.output_tokens += session.tokens.output_tokens
+            if session:
+                await self._post_attempt_summary(issue, session, attempt)
             raise
         except Exception as e:
             logger.error(
@@ -349,6 +465,7 @@ class Orchestrator:
                 self._schedule_retry(issue, attempt=current_attempt, error=str(e))
             if session:
                 await self._record_stats(issue, session, success=False, attempt=attempt)
+                await self._post_attempt_summary(issue, session, attempt)
 
     async def _record_stats(
         self,

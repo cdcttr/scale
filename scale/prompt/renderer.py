@@ -31,9 +31,18 @@ def _issue_ctx(issue: Issue) -> dict:
     }
 
 
-def render_prompt(template: str, issue: Issue, attempt: Optional[int]) -> str:
+def render_prompt(
+    template: str,
+    issue: Issue,
+    attempt: Optional[int],
+    previous_attempt_summary: Optional[str] = None,
+) -> str:
     tmpl = _env.from_string(template)
-    return _SAFETY_PREAMBLE + tmpl.render(issue=_issue_ctx(issue), attempt=attempt)
+    return _SAFETY_PREAMBLE + tmpl.render(
+        issue=_issue_ctx(issue),
+        attempt=attempt,
+        previous_attempt_summary=previous_attempt_summary or "",
+    )
 
 
 def render_review_prompt(
