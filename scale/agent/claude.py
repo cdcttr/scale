@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +57,13 @@ def parse_stream_event(line: str) -> Optional[TurnResult]:
     return None
 
 
+def _kill_proc(proc: asyncio.subprocess.Process) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 class ClaudeRunner:
     def __init__(self, config: CodexConfig) -> None:
         self._config = config
@@ -89,6 +98,7 @@ class ClaudeRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=8 * 1024 * 1024,
+            start_new_session=True,
         )
 
         start_sha = await get_head_sha(workspace)
@@ -102,85 +112,88 @@ class ClaudeRunner:
         stall_workspace_state: Optional[WorkspaceState] = None
 
         assert proc.stdout is not None
-        while True:
-            try:
-                raw_line = await asyncio.wait_for(
-                    proc.stdout.readline(),
-                    timeout=heartbeat_s,
-                )
-            except asyncio.TimeoutError:
-                now = time.monotonic()
-                elapsed_s = now - last_activity
-
-                if on_event:
-                    on_event({"type": "scale:heartbeat", "elapsed_s": round(elapsed_s)})
-
-                if stall_detected_at is not None:
-                    if (now - stall_detected_at) >= grace_period_s:
-                        proc.kill()
-                        await proc.wait()
-                        logger.warning(
-                            "stall grace period exceeded in %s after %.0fs",
-                            workspace, now - stall_detected_at,
-                        )
-                        return TurnResult(
-                            success=False,
-                            usage=None,
-                            message=f"Stall grace period exceeded after {now - stall_detected_at:.0f}s",
-                            stall_info=stall_workspace_state,
-                        )
-                elif elapsed_s >= stall_timeout_s:
-                    ws_state = await gather_workspace_state(workspace, since_sha=start_sha)
-                    stall_workspace_state = ws_state
-                    stall_event: dict = {
-                        "type": "scale:stall",
-                        "elapsed_s": round(elapsed_s),
-                        "uncommitted_files": ws_state.uncommitted_files,
-                        "commits_since_start": ws_state.commits_since_start,
-                        "status_summary": ws_state.status_summary,
-                        "grace_period": ws_state.has_progress,
-                    }
-                    if on_event:
-                        on_event(stall_event)
-                    logger.warning(
-                        "stall detected in %s — elapsed=%.0fs uncommitted=%d commits_since=%d grace=%s",
-                        workspace, elapsed_s, ws_state.uncommitted_files,
-                        ws_state.commits_since_start, ws_state.has_progress,
-                    )
-                    if ws_state.has_progress:
-                        stall_detected_at = now
-                    else:
-                        proc.kill()
-                        await proc.wait()
-                        return TurnResult(
-                            success=False,
-                            usage=None,
-                            message=f"Stall timeout after {elapsed_s:.0f}s with no workspace progress",
-                            stall_info=ws_state,
-                        )
-                continue
-
-            if not raw_line:
-                break
-
-            last_activity = time.monotonic()
-            stall_detected_at = None
-
-            line = raw_line.decode().strip()
-            if not line:
-                continue
-            parsed = parse_stream_event(line)
-            if parsed is not None:
-                result = parsed
-            if on_event:
+        try:
+            while True:
                 try:
-                    event = json.loads(line)
-                    on_event(event)
-                except json.JSONDecodeError:
-                    pass
+                    raw_line = await asyncio.wait_for(
+                        proc.stdout.readline(),
+                        timeout=heartbeat_s,
+                    )
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    elapsed_s = now - last_activity
+
+                    if on_event:
+                        on_event({"type": "scale:heartbeat", "elapsed_s": round(elapsed_s)})
+
+                    if stall_detected_at is not None:
+                        if (now - stall_detected_at) >= grace_period_s:
+                            _kill_proc(proc)
+                            await proc.wait()
+                            logger.warning(
+                                "stall grace period exceeded in %s after %.0fs",
+                                workspace, now - stall_detected_at,
+                            )
+                            return TurnResult(
+                                success=False,
+                                usage=None,
+                                message=f"Stall grace period exceeded after {now - stall_detected_at:.0f}s",
+                                stall_info=stall_workspace_state,
+                            )
+                    elif elapsed_s >= stall_timeout_s:
+                        ws_state = await gather_workspace_state(workspace, since_sha=start_sha)
+                        stall_workspace_state = ws_state
+                        stall_event: dict = {
+                            "type": "scale:stall",
+                            "elapsed_s": round(elapsed_s),
+                            "uncommitted_files": ws_state.uncommitted_files,
+                            "commits_since_start": ws_state.commits_since_start,
+                            "status_summary": ws_state.status_summary,
+                            "grace_period": ws_state.has_progress,
+                        }
+                        if on_event:
+                            on_event(stall_event)
+                        logger.warning(
+                            "stall detected in %s — elapsed=%.0fs uncommitted=%d commits_since=%d grace=%s",
+                            workspace, elapsed_s, ws_state.uncommitted_files,
+                            ws_state.commits_since_start, ws_state.has_progress,
+                        )
+                        if ws_state.has_progress:
+                            stall_detected_at = now
+                        else:
+                            _kill_proc(proc)
+                            await proc.wait()
+                            return TurnResult(
+                                success=False,
+                                usage=None,
+                                message=f"Stall timeout after {elapsed_s:.0f}s with no workspace progress",
+                                stall_info=ws_state,
+                            )
+                    continue
+
+                if not raw_line:
+                    break
+
+                last_activity = time.monotonic()
+                stall_detected_at = None
+
+                line = raw_line.decode().strip()
+                if not line:
+                    continue
+                parsed = parse_stream_event(line)
+                if parsed is not None:
+                    result = parsed
+                if on_event:
+                    try:
+                        event = json.loads(line)
+                        on_event(event)
+                    except json.JSONDecodeError:
+                        pass
+        finally:
+            _kill_proc(proc)
+            await proc.wait()
 
         stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-        await proc.wait()
 
         stderr_text = stderr_bytes.decode(errors="replace").strip()
         if proc.returncode != 0 and result is None:

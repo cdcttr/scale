@@ -268,7 +268,7 @@ async def test_run_worker_adds_pr_open_label_when_review_configured():
 
     added_labels: list[tuple] = []
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=""):
         pass
 
     async def _mock_add_labels(number, labels):
@@ -303,7 +303,7 @@ async def test_run_worker_adds_terminal_label_when_no_review():
 
     added_labels: list[tuple] = []
 
-    async def _mock_run(iss, cfg, attempt, on_event=None):
+    async def _mock_run(iss, cfg, attempt, on_event=None, previous_attempt_summary=""):
         pass
 
     async def _mock_add_labels(number, labels):
