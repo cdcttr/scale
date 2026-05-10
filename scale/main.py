@@ -135,6 +135,47 @@ async def _plan(
     await runner.run(issues, force=force)
 
 
+async def _logs(
+    workflow_path: Path,
+    issue_number: int,
+    show_all: bool,
+    archived: bool,
+) -> None:
+    from scale.config.loader import load_workflow
+    from scale.logs.reader import LogReader, find_archived_log, find_workspace
+
+    config = load_workflow(workflow_path)
+    workspace_root = Path(config.workspace.root)
+
+    if archived:
+        if not config.workspace.log_archive:
+            print("Error: log_archive is not configured in WORKFLOW.md", file=sys.stderr)
+            sys.exit(1)
+        log_path = find_archived_log(Path(config.workspace.log_archive), issue_number)
+        if log_path is None:
+            print(f"Error: no archived log found for issue #{issue_number}", file=sys.stderr)
+            sys.exit(1)
+        for line in LogReader(log_path).iter_formatted():
+            print(line)
+        return
+
+    workspace_dir = find_workspace(workspace_root, issue_number)
+    if workspace_dir is None:
+        print(f"Error: no workspace found for issue #{issue_number}", file=sys.stderr)
+        sys.exit(1)
+
+    log_path = workspace_dir / "agent.log"
+    if show_all:
+        if not log_path.exists():
+            print(f"Error: agent.log not found in {workspace_dir}", file=sys.stderr)
+            sys.exit(1)
+        for line in LogReader(log_path).iter_formatted():
+            print(line)
+        return
+
+    await LogReader(log_path).tail(workspace_dir=workspace_dir)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scale — Claude Code orchestrator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -272,6 +313,26 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
 
+    logs_p = sub.add_parser("logs", help="Stream human-readable agent activity for an issue")
+    logs_p.add_argument("issue", type=int, help="Issue number")
+    logs_p.add_argument(
+        "workflow",
+        nargs="?",
+        default="WORKFLOW.md",
+        help="Path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    logs_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="all",
+        help="Show full log from the beginning instead of tailing",
+    )
+    logs_p.add_argument(
+        "--archived",
+        action="store_true",
+        help="Read from log_archive instead of active workspace",
+    )
+
     return parser
 
 
@@ -330,6 +391,10 @@ def main() -> None:
     if args.command == "clean":
         _setup_logging(args.log_level)
         asyncio.run(_clean(Path(args.workflow), args.dry_run, args.all_workspaces, args.yes))
+        return
+
+    if args.command == "logs":
+        asyncio.run(_logs(Path(args.workflow), args.issue, args.all, args.archived))
         return
 
     console = Console()
