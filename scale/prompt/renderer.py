@@ -45,6 +45,21 @@ def render_prompt(
     )
 
 
+def render_feedback_prompt(
+    template: str,
+    issue: Issue,
+    pr_diff: str,
+    pr_comments: list[dict],
+) -> str:
+    tmpl = _env.from_string(template)
+    formatted = "\n\n".join(
+        f"**{c.get('user', {}).get('login', 'unknown')}** ({c.get('created_at', '')}): {c.get('body', '')}"
+        for c in pr_comments
+    )
+    pr_feedback = f"## PR Diff\n\n```diff\n{pr_diff}\n```\n\n## Review Comments\n\n{formatted}"
+    return _SAFETY_PREAMBLE + tmpl.render(issue=_issue_ctx(issue), pr_feedback=pr_feedback)
+
+
 def render_review_prompt(
     template: str,
     issue: Issue,
