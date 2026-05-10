@@ -74,3 +74,24 @@ def render_review_prompt(
         "diff": pr_diff,
     }
     return _SAFETY_PREAMBLE + tmpl.render(issue=_issue_ctx(issue), pr=pr_ctx)
+
+
+def render_rebase_prompt(
+    template: str,
+    issue: Issue,
+    pr_number: int,
+    pr_url: str,
+    pr_diff: str,
+    conflict_context: str,
+) -> str:
+    tmpl = _env.from_string(template)
+    pr_ctx = {
+        "number": pr_number,
+        "url": pr_url,
+        "diff": pr_diff,
+    }
+    return _SAFETY_PREAMBLE + tmpl.render(
+        issue=_issue_ctx(issue),
+        pr=pr_ctx,
+        conflict_context=conflict_context,
+    )
