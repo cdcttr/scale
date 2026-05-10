@@ -36,6 +36,7 @@ class AgentConfig(BaseModel):
     max_concurrent_agents_by_state: dict[str, int] = {}
     completed_display_s: int = 300
     supervised_label: str = "scale:supervised"
+    auto_merge: bool = False
 
 
 class CodexConfig(BaseModel):
@@ -84,6 +85,7 @@ class ReviewConfig(BaseModel):
     needs_revision_label: str = "scale:needs-revision"
     conflict_label: str = "scale:conflict"
     template: str = ""
+    merge_label: str = "scale:merge"
     feedback_enabled: bool = False
 
 
