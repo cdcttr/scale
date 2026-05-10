@@ -1,10 +1,18 @@
 import asyncio
 import json
+import os
+import signal
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 from scale.agent.claude import ClaudeRunner, parse_stream_event, TurnResult, TokenUsage
 from scale.config.schema import CodexConfig
+
+
+@pytest.fixture(autouse=True)
+def _patch_killpg(monkeypatch):
+    monkeypatch.setattr("scale.agent.claude.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr("scale.agent.claude.os.killpg", lambda pgid, sig: None)
 
 
 def _runner() -> ClaudeRunner:
@@ -197,3 +205,73 @@ async def test_run_turn_large_line_succeeds(tmp_path: Path):
     with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
         result = await _runner().run_turn(tmp_path, "prompt", False)
     assert result.success
+
+
+@pytest.mark.asyncio
+async def test_run_turn_uses_start_new_session(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))) as mock_exec:
+        await _runner().run_turn(tmp_path, "prompt", False)
+    assert mock_exec.call_args.kwargs.get("start_new_session") is True
+
+
+@pytest.mark.asyncio
+async def test_run_turn_kills_process_group_on_cancellation(tmp_path: Path):
+    async def _hanging_stdout():
+        await asyncio.sleep(9999)
+        yield b""
+
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.returncode = -9
+    proc.stdout = MagicMock()
+    proc.stdout.__aiter__ = lambda self: _hanging_stdout()
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        with patch("os.getpgid", return_value=12345) as mock_getpgid:
+            with patch("os.killpg") as mock_killpg:
+                task = asyncio.create_task(
+                    _runner().run_turn(tmp_path, "prompt", False)
+                )
+                await asyncio.sleep(0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    mock_killpg.assert_called_once_with(12345, signal.SIGKILL)
+    proc.wait.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_handles_process_already_gone(tmp_path: Path):
+    async def _hanging_stdout():
+        await asyncio.sleep(9999)
+        yield b""
+
+    proc = MagicMock()
+    proc.pid = 99999
+    proc.returncode = -9
+    proc.stdout = MagicMock()
+    proc.stdout.__aiter__ = lambda self: _hanging_stdout()
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"")
+    proc.wait = AsyncMock()
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        with patch("os.getpgid", return_value=99999):
+            with patch("os.killpg", side_effect=ProcessLookupError):
+                task = asyncio.create_task(
+                    _runner().run_turn(tmp_path, "prompt", False)
+                )
+                await asyncio.sleep(0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    proc.wait.assert_called()

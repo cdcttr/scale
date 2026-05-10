@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -86,27 +88,34 @@ class ClaudeRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=8 * 1024 * 1024,
+            start_new_session=True,
         )
 
         result: Optional[TurnResult] = None
 
         assert proc.stdout is not None
-        async for raw_line in proc.stdout:
-            line = raw_line.decode().strip()
-            if not line:
-                continue
-            parsed = parse_stream_event(line)
-            if parsed is not None:
-                result = parsed
-            if on_event:
-                try:
-                    event = json.loads(line)
-                    on_event(event)
-                except json.JSONDecodeError:
-                    pass
+        try:
+            async for raw_line in proc.stdout:
+                line = raw_line.decode().strip()
+                if not line:
+                    continue
+                parsed = parse_stream_event(line)
+                if parsed is not None:
+                    result = parsed
+                if on_event:
+                    try:
+                        event = json.loads(line)
+                        on_event(event)
+                    except json.JSONDecodeError:
+                        pass
+        finally:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await proc.wait()
 
         stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-        await proc.wait()
 
         stderr_text = stderr_bytes.decode(errors="replace").strip()
         if proc.returncode != 0 and result is None:
