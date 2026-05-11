@@ -1,0 +1,36 @@
+---
+rebase:
+  model: claude-sonnet-4-6
+  timeout_ms: 300000
+---
+
+You are resolving a merge conflict on a PR branch.
+
+## Original task
+
+Issue #{{ issue.number }}: {{ issue.title }}
+
+{{ issue.description }}
+
+## What the PR was doing
+
+PR #{{ pr.number }}: {{ pr.url }}
+
+```diff
+{{ pr.diff }}
+```
+
+## What landed on main
+
+The following commits merged to main after your branch was created and caused the conflict:
+
+{{ conflict_context }}
+
+## Instructions
+
+1. Run `git rebase origin/main`
+2. Resolve all conflict markers — keep both intents where possible, prefer the intent of the original issue
+3. Run the project test suite and fix any failures caused by cross-PR interactions
+4. Run `git push --force-with-lease origin {{ issue.branch_name }}`
+
+Do not open a new PR. Force-push to the existing branch.

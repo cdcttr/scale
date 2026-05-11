@@ -50,4 +50,12 @@ def load_workflow(path: Path) -> WorkflowConfig:
         review_section["template"] = review_post.content
         data["review"] = review_section
 
+    rebase_path = path.parent / "REBASE.md"
+    if rebase_path.exists():
+        rebase_post = frontmatter.load(str(rebase_path))
+        rebase_meta = resolve_vars(dict(rebase_post.metadata))
+        rebase_section = rebase_meta.get("rebase") or {}
+        rebase_section["template"] = rebase_post.content
+        data["rebase"] = rebase_section
+
     return WorkflowConfig.model_validate(data)
