@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from scale.agent.claude import ClaudeRunner
+from scale.agent.claude import ClaudeRunner, TurnResult
 from scale.config.schema import WorkflowConfig
 from scale.prompt.renderer import render_review_prompt
 from scale.tracker.models import Issue
@@ -24,7 +24,7 @@ class ReviewWorker:
         pr_url: str,
         pr_diff: str,
         on_event: Optional[Callable[[dict], None]] = None,
-    ) -> None:
+    ) -> "TurnResult":
         assert self._config.review is not None
         review = self._config.review
 
@@ -47,3 +47,4 @@ class ReviewWorker:
 
         if not result.success:
             raise RuntimeError(f"Review failed: {result.message}")
+        return result

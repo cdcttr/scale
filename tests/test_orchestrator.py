@@ -1471,7 +1471,8 @@ async def test_try_auto_merge_waits_for_in_progress_checks():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_run_reviewer_calls_try_auto_merge_when_enabled():
+async def test_run_reviewer_approve_adds_merge_label():
+    from scale.agent.claude import TurnResult
     tracker = AsyncMock()
     orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
     orch._github = AsyncMock()
@@ -1479,22 +1480,26 @@ async def test_run_reviewer_calls_try_auto_merge_when_enabled():
     orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
     orch._github.add_labels = AsyncMock()
     orch._github.remove_label = AsyncMock()
+    orch._github.post_comment = AsyncMock()
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
 
-    with patch("scale.orchestrator.core.ReviewWorker") as MockRW, \
-         patch.object(orch, "_try_auto_merge", AsyncMock()) as mock_merge:
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
         mock_rw = MagicMock()
-        mock_rw.run = AsyncMock()
+        mock_rw.run = AsyncMock(return_value=TurnResult(
+            success=True, usage=None, message="LGTM.\nVERDICT: APPROVE"
+        ))
         MockRW.return_value = mock_rw
         await orch._run_reviewer(issue)
 
-    mock_merge.assert_called_once_with(issue, 10)
+    orch._github.add_labels.assert_called_once_with(issue.number, ["scale:merge"])
+    orch._github.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
 
 
 @pytest.mark.asyncio
-async def test_run_reviewer_skips_try_auto_merge_when_disabled():
+async def test_run_reviewer_request_changes_adds_needs_revision():
+    from scale.agent.claude import TurnResult
     tracker = AsyncMock()
     orch = Orchestrator(_config_with_review(auto_merge=False), tracker)
     orch._github = AsyncMock()
@@ -1502,18 +1507,22 @@ async def test_run_reviewer_skips_try_auto_merge_when_disabled():
     orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
     orch._github.add_labels = AsyncMock()
     orch._github.remove_label = AsyncMock()
+    orch._github.post_comment = AsyncMock()
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
 
-    with patch("scale.orchestrator.core.ReviewWorker") as MockRW, \
-         patch.object(orch, "_try_auto_merge", AsyncMock()) as mock_merge:
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
         mock_rw = MagicMock()
-        mock_rw.run = AsyncMock()
+        mock_rw.run = AsyncMock(return_value=TurnResult(
+            success=True, usage=None,
+            message="Missing tests.\nVERDICT: REQUEST_CHANGES: tests are missing"
+        ))
         MockRW.return_value = mock_rw
         await orch._run_reviewer(issue)
 
-    mock_merge.assert_not_called()
+    orch._github.add_labels.assert_called_once_with(issue.number, ["scale:needs-revision"])
+    orch._github.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
 
 
 # ---------------------------------------------------------------------------

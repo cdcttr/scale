@@ -5,6 +5,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from scale.agent.claude import TurnResult
 from scale.config.schema import (
     WorkflowConfig, TrackerConfig, ReviewConfig,
 )
@@ -390,43 +391,40 @@ async def test_tick_does_not_redispatch_claimed_pr_open_issues():
 
 
 @pytest.mark.asyncio
-async def test_run_reviewer_success_adds_terminal_and_removes_pr_open():
+async def test_run_reviewer_approve_adds_merge_label_and_comment():
     tracker = AsyncMock()
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
 
     issue = _issue(number=3, labels=["scale:pr-open"])
-
     pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
     add_calls: list[tuple] = []
     remove_calls: list[tuple] = []
-
-    async def _mock_add(number, labels):
-        add_calls.append((number, labels))
-
-    async def _mock_remove(number, label):
-        remove_calls.append((number, label))
+    comment_calls: list[tuple] = []
 
     with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
          patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
-         patch.object(orch._github, "add_labels", side_effect=_mock_add), \
-         patch.object(orch._github, "remove_label", side_effect=_mock_remove), \
+         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
+         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
+         patch.object(orch._github, "post_comment", AsyncMock(side_effect=lambda n, b: comment_calls.append((n, b)))), \
          patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
         mock_rw = MagicMock()
-        mock_rw.run = AsyncMock()
+        mock_rw.run = AsyncMock(return_value=TurnResult(
+            success=True, usage=None, message="Looks good.\nVERDICT: APPROVE"
+        ))
         MockReviewer.return_value = mock_rw
         orch._state.claimed.add(issue.id)
         await orch._run_reviewer(issue)
 
-    label_calls = [labels for _, labels in add_calls]
-    assert any("scale:done" in labels for labels in label_calls)
+    assert any("scale:merge" in labels for _, labels in add_calls)
     assert any((n, lbl) == (issue.number, "scale:pr-open") for n, lbl in remove_calls)
+    assert any("Approved" in body for _, body in comment_calls)
     assert issue.id not in orch._state.claimed
 
 
 @pytest.mark.asyncio
-async def test_run_reviewer_failure_adds_conflict_label():
+async def test_run_reviewer_exception_removes_pr_open_and_releases_claim():
     tracker = AsyncMock()
     config = _config_with_review()
     orch = Orchestrator(config, tracker)
@@ -437,26 +435,20 @@ async def test_run_reviewer_failure_adds_conflict_label():
     add_calls: list[tuple] = []
     remove_calls: list[tuple] = []
 
-    async def _mock_add(number, labels):
-        add_calls.append((number, labels))
-
-    async def _mock_remove(number, label):
-        remove_calls.append((number, label))
-
     with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
          patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
-         patch.object(orch._github, "add_labels", side_effect=_mock_add), \
-         patch.object(orch._github, "remove_label", side_effect=_mock_remove), \
+         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
+         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
+         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
         mock_rw = MagicMock()
-        mock_rw.run = AsyncMock(side_effect=RuntimeError("merge conflict"))
+        mock_rw.run = AsyncMock(side_effect=RuntimeError("agent crashed"))
         MockReviewer.return_value = mock_rw
         orch._state.claimed.add(issue.id)
         await orch._run_reviewer(issue)
 
-    label_calls = [labels for _, labels in add_calls]
-    assert any("scale:conflict" in labels for labels in label_calls)
-    assert not any("scale:done" in labels for labels in label_calls)
+    assert not any("scale:conflict" in labels for _, labels in add_calls)
+    assert not any("scale:done" in labels for _, labels in add_calls)
     assert any((n, lbl) == (issue.number, "scale:pr-open") for n, lbl in remove_calls)
     assert issue.id not in orch._state.claimed
 
@@ -472,7 +464,8 @@ async def test_run_reviewer_no_pr_skips_review():
     add_calls: list[tuple] = []
 
     with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=None)), \
-         patch.object(orch._github, "add_labels", side_effect=lambda n, l: add_calls.append((n, l))):
+         patch.object(orch._github, "fetch_pr_for_issue", AsyncMock(return_value=None)), \
+         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))):
         orch._state.claimed.add(issue.id)
         await orch._run_reviewer(issue)
 
