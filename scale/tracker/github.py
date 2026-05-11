@@ -65,7 +65,7 @@ class GitHubClient(TrackerClient):
             description=item.get("body") or "",
             state=self._resolve_state(labels, item["state"]),
             labels=labels,
-            branch_name=f"symphony/{number}-{_slugify(title)}",
+            branch_name=f"scale/{number}",
             url=item["html_url"],
             priority=_parse_priority(labels),
             created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),

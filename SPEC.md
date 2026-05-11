@@ -75,7 +75,7 @@ class Issue:
     description: str   # issue body text (may be empty string)
     state: str         # "active" | "terminal" | "ignored"
     labels: list[str]  # current label names
-    branch_name: str   # "symphony/{number}-{slug}"
+    branch_name: str   # "scale/{number}"
     url: str           # HTML URL
     priority: int | None  # from "priority:N" label, else None
     created_at: datetime  # timezone-aware UTC
@@ -89,7 +89,7 @@ class Issue:
 4. `tracker.active_labels` non-empty and not all present → `"ignored"`
 5. Otherwise → `"active"`
 
-**Branch name derivation**: `f"symphony/{number}-{_slugify(title)}"`. The `_slugify` function lowercases the title, replaces all non-alphanumeric characters with `-`, strips leading/trailing hyphens, and truncates to 50 characters.
+**Branch name derivation**: `f"scale/{number}"`. Matches the branch naming convention used by agents (`git checkout -b scale/{{ issue.number }}`).
 
 **Priority parsing**: the first label matching `^priority:(\d+)$` sets `priority`. If no such label exists, `priority` is `None`. `None` sorts last (maps to `999`).
 
@@ -213,7 +213,7 @@ operator applies → │ scale:triage                │
           detail)      │                         │
 ```
 
-Re-triage is triggered automatically when `issue.updated_at` is newer than the timestamp in the most recent `<!-- symphony-triage {timestamp} -->` comment. If no such comment exists, triage always runs.
+Re-triage is triggered automatically when `issue.updated_at` is newer than the timestamp in the most recent `<!-- scale-triage {timestamp} -->` comment. If no such comment exists, triage always runs.
 
 Issues with any of the following labels are excluded from triage dispatch even if `scale:triage` is present: `scale:triaged`, `scale:ready`, `scale:needs-detail`, `scale:needs-approval`, `scale:supervised`, any `skip_labels`, any `terminal_labels`.
 
@@ -476,7 +476,7 @@ Called for the initial turn of every issue attempt.
 | `issue.description` | `str` | Issue body text |
 | `issue.state` | `str` | Always `"active"` at dispatch |
 | `issue.labels` | `list[str]` | Current label names |
-| `issue.branch_name` | `str` | `"symphony/{number}-{slug}"` |
+| `issue.branch_name` | `str` | `"scale/{number}"` |
 | `issue.url` | `str` | HTML URL |
 | `issue.priority` | `int \| None` | Priority value or `None` |
 
@@ -692,7 +692,7 @@ An issue MUST have `triage_label` (`scale:triage` by default) to be triaged. Iss
 
 ### 9.2 Re-Triage Detection
 
-`_needs_triage(issue, comments, force)` inspects the issue's comment history for the most recent comment starting with `<!-- symphony-triage {iso-timestamp} -->`. If found and `issue.updated_at ≤ timestamp`, triage is skipped. Otherwise (no comment, unparseable timestamp, or issue updated since last triage), triage runs.
+`_needs_triage(issue, comments, force)` inspects the issue's comment history for the most recent comment starting with `<!-- scale-triage {iso-timestamp} -->`. If found and `issue.updated_at ≤ timestamp`, triage is skipped. Otherwise (no comment, unparseable timestamp, or issue updated since last triage), triage runs.
 
 ### 9.3 Verdict and Label Transitions
 
@@ -704,7 +704,7 @@ After assessment:
 | `False` | `True` | Add `needs_approval_label` + `triaged_label`; remove `ready_label` + `needs_detail_label` |
 | `False` | `False` | Add `needs_detail_label` + `triaged_label`; remove `ready_label` |
 
-Scale MUST post a comment with format `<!-- symphony-triage {ISO-8601 UTC timestamp} -->\n{assessment.comment}` before applying label changes. The timestamp is used for re-triage detection.
+Scale MUST post a comment with format `<!-- scale-triage {ISO-8601 UTC timestamp} -->\n{assessment.comment}` before applying label changes. The timestamp is used for re-triage detection.
 
 If assessment returns `None` (agent failure), Scale logs a warning and skips the issue.
 
