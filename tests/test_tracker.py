@@ -11,7 +11,7 @@ def _make_issue(**kwargs) -> Issue:
         description="A bug",
         state="active",
         labels=[],
-        branch_name="symphony/1-fix-bug",
+        branch_name="scale/1",
         url="https://github.com/owner/repo/issues/1",
         priority=None,
         created_at=datetime(2026, 1, 1),
@@ -129,7 +129,7 @@ def test_identifier_format():
     client = GitHubClient(_config())
     issue = client._normalize(_gh_issue(number=42, title="Fix bug"))
     assert issue.identifier == "owner/repo#42"
-    assert issue.branch_name == "symphony/42-fix-bug"
+    assert issue.branch_name == "scale/42"
 
 
 from urllib.parse import quote as _url_quote
