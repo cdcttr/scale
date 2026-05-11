@@ -233,6 +233,29 @@ class GitHubClient(TrackerClient):
             prs = r.json()
             return prs[0] if prs else None
 
+    async def fetch_pr_for_issue(self, issue_number: int) -> Optional[dict]:
+        _closes = re.compile(
+            rf'(?:closes|fixes|resolves)\s+#?{issue_number}\b',
+            re.IGNORECASE,
+        )
+        page = 1
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                r = await client.get(
+                    f"{self._base}/pulls",
+                    headers=self._headers,
+                    params={"state": "open", "per_page": 100, "page": page},
+                )
+                r.raise_for_status()
+                prs = r.json()
+                if not prs:
+                    return None
+                for pr in prs:
+                    body = pr.get("body") or ""
+                    if _closes.search(body):
+                        return pr
+                page += 1
+
     async def fetch_pr_comments(self, pr_number: int, since: Optional[datetime] = None) -> list[dict]:
         params: dict = {"per_page": 100}
         if since:
