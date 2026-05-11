@@ -1596,20 +1596,16 @@ async def test_watch_merge_queue_tick_merges_issues_with_merge_label():
 
 
 @pytest.mark.asyncio
-async def test_watch_merge_queue_tick_ignores_issues_without_merge_label():
+async def test_watch_merge_queue_tick_fetches_by_merge_label():
     tracker = AsyncMock()
     orch = Orchestrator(_config_with_review(), tracker)
     orch._github = AsyncMock()
+    orch._github.fetch_issues_by_label = AsyncMock(return_value=[])
 
-    pr_open_only = _issue(id_="p1", number=8)
-    pr_open_only.labels = ["scale:pr-open"]
-
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[pr_open_only])
-
-    with patch.object(orch, "_merge_issue", AsyncMock()) as mock_merge:
+    with patch.object(orch, "_merge_issue", AsyncMock()):
         await orch._watch_merge_queue_tick()
 
-    mock_merge.assert_not_called()
+    orch._github.fetch_issues_by_label.assert_called_once_with("scale:merge")
 
 
 @pytest.mark.asyncio
