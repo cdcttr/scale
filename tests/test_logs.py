@@ -277,12 +277,12 @@ def test_fmt_prefix_consistent_width():
     assert len(_fmt_prefix(None, 0)) == len(_fmt_prefix(99.0, 14200))
 
 
-def test_format_event_extracts_tokens_from_message_usage():
+def test_format_event_uses_cumulative_tokens_parameter():
     event = _assistant(
         [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
         usage={"input_tokens": 1000, "output_tokens": 500},
     )
-    lines = _format_event(event, turn=1)
+    lines = _format_event(event, turn=1, cumulative_tokens=1500)
     assert len(lines) == 1
     assert "1.5k tokens" in lines[0]
 
@@ -293,9 +293,8 @@ def test_format_event_elapsed_appears_on_first_line_only():
             {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
             {"type": "text", "text": "Done"},
         ],
-        usage={"input_tokens": 800, "output_tokens": 200},
     )
-    lines = _format_event(event, turn=1, elapsed_s=8.0)
+    lines = _format_event(event, turn=1, elapsed_s=8.0, cumulative_tokens=1000)
     assert len(lines) == 2
     assert "8s" in lines[0]
     assert "1.0k tokens" in lines[0]
@@ -364,3 +363,36 @@ def test_log_reader_static_result_has_no_total_time(tmp_path):
     lines = list(reader.iter_formatted())
     result_line = next(l for l in lines if "[result]" in l)
     assert "total" not in result_line
+
+
+def test_log_reader_shows_last_cumulative_when_turn_has_no_usage(tmp_path):
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Turn 1"}],
+                                          "usage": {"input_tokens": 1000, "output_tokens": 500}}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Turn 2"}]}},
+        {"type": "result", "subtype": "success", "num_turns": 2,
+         "usage": {"input_tokens": 1000, "output_tokens": 500}},
+    ]
+    log = _make_log(tmp_path, events)
+    lines = list(LogReader(log).iter_formatted())
+    turn1_line = next(l for l in lines if "[turn 1]" in l)
+    turn2_line = next(l for l in lines if "[turn 2]" in l)
+    assert "1.5k tokens" in turn1_line
+    assert "1.5k tokens" in turn2_line
+
+
+def test_log_reader_accumulates_tokens_across_turns(tmp_path):
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Turn 1"}],
+                                          "usage": {"input_tokens": 1000, "output_tokens": 500}}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Turn 2"}],
+                                          "usage": {"input_tokens": 200, "output_tokens": 100}}},
+        {"type": "result", "subtype": "success", "num_turns": 2,
+         "usage": {"input_tokens": 1200, "output_tokens": 600}},
+    ]
+    log = _make_log(tmp_path, events)
+    lines = list(LogReader(log).iter_formatted())
+    turn1_line = next(l for l in lines if "[turn 1]" in l)
+    turn2_line = next(l for l in lines if "[turn 2]" in l)
+    assert "1.5k tokens" in turn1_line
+    assert "1.8k tokens" in turn2_line
