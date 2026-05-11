@@ -89,6 +89,13 @@ class ReviewConfig(BaseModel):
     feedback_enabled: bool = False
 
 
+class RebaseConfig(BaseModel):
+    model: str = "claude-sonnet-4-6"
+    timeout_ms: int = 300_000
+    conflict_label: str = "scale:conflict"
+    template: str = ""
+
+
 class WorkflowConfig(BaseModel):
     tracker: TrackerConfig
     polling: PollingConfig = Field(default_factory=PollingConfig)
@@ -101,4 +108,5 @@ class WorkflowConfig(BaseModel):
     triage: Optional[TriageConfig] = None
     planner: Optional[PlannerConfig] = None
     review: Optional[ReviewConfig] = None
+    rebase: Optional[RebaseConfig] = None
     prompt_template: str = ""

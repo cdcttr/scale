@@ -136,7 +136,7 @@ def test_workflow_config_triage_set():
     assert wf.triage.triaged_label == "scale:triaged"
 
 
-from scale.config.schema import PlannerConfig
+from scale.config.schema import PlannerConfig, RebaseConfig
 
 def test_planner_config_defaults():
     cfg = PlannerConfig()
@@ -168,3 +168,37 @@ def test_workflow_config_with_planner():
     assert cfg.planner is not None
     assert cfg.planner.model == "claude-opus-4-7"
     assert cfg.planner.max_depth == 2
+
+
+def test_rebase_config_defaults():
+    cfg = RebaseConfig()
+    assert cfg.model == "claude-sonnet-4-6"
+    assert cfg.timeout_ms == 300_000
+    assert cfg.conflict_label == "scale:conflict"
+    assert cfg.template == ""
+
+
+def test_workflow_config_rebase_optional():
+    cfg = WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        prompt_template="x",
+    )
+    assert cfg.rebase is None
+
+
+def test_load_workflow_loads_rebase_md(tmp_path):
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("---\ntracker:\n  repo: o/r\n  api_token: tok\n---\nDo work.")
+    rebase = tmp_path / "REBASE.md"
+    rebase.write_text("---\nrebase:\n  timeout_ms: 120000\n---\nResolve conflicts.")
+    cfg = load_workflow(workflow)
+    assert cfg.rebase is not None
+    assert cfg.rebase.timeout_ms == 120000
+    assert cfg.rebase.template == "Resolve conflicts."
+
+
+def test_load_workflow_no_rebase_md(tmp_path):
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("---\ntracker:\n  repo: o/r\n  api_token: tok\n---\nDo work.")
+    cfg = load_workflow(workflow)
+    assert cfg.rebase is None
