@@ -70,7 +70,6 @@ def test_workflow_config_triage_set():
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/djohnson/projects/openai-symphony
 uv run pytest tests/test_config.py::test_triage_config_defaults -v
 ```
 
