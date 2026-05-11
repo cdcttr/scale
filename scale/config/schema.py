@@ -7,6 +7,7 @@ class TrackerConfig(BaseModel):
     kind: Literal["github"] = "github"
     repo: str
     api_token: str
+    default_branch: str = "main"
     active_labels: list[str] = []
     skip_labels: list[str] = ["scale:skip"]
     terminal_labels: list[str] = ["scale:done"]
