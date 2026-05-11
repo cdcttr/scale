@@ -30,6 +30,9 @@ agent:
   max_concurrent_agents: 2
   max_turns: 20
 
+codex:
+  stall_timeout_ms: 600000
+
 review:
   model: claude-haiku-4-5-20251001
   pr_open_label: scale:pr-open
