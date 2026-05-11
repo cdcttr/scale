@@ -579,7 +579,10 @@ class Orchestrator:
             worker = ReviewWorker(self._config)
             result = await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
 
-            verdict_line = result.message.strip().splitlines()[-1] if result.message else ""
+            verdict_line = next(
+                (l for l in reversed((result.message or "").splitlines()) if l.startswith("VERDICT:")),
+                "",
+            )
             if verdict_line.startswith("VERDICT: APPROVE"):
                 await self._github.post_comment(
                     issue.number, f"**Review:** Approved.\n\n{result.message}"
@@ -737,6 +740,8 @@ class Orchestrator:
         review = self._config.review
         try:
             pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            if pr is None:
+                pr = await self._github.fetch_pr_for_issue(issue.number)
             if pr is None:
                 logger.warning("No open PR for issue #%d, skipping merge", issue.number)
                 return
