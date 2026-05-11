@@ -16,6 +16,7 @@ from scale.tracker.github import GitHubClient
 from scale.tracker.models import Issue
 from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
+from scale.worker.rebase import RebaseWorker
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
@@ -87,6 +88,8 @@ class Orchestrator:
             tasks.append(asyncio.create_task(self._watch_merge_queue()))
         if self._config.review and self._config.review.feedback_enabled:
             tasks.append(asyncio.create_task(self._watch_pr_feedback()))
+        if self._config.rebase:
+            tasks.append(asyncio.create_task(self._watch_conflict_queue()))
         await asyncio.gather(*tasks)
 
     async def _tick_loop(self) -> None:
@@ -752,6 +755,55 @@ class Orchestrator:
             await self._github.remove_label(issue.number, review.merge_label)
         except Exception as e:
             logger.error("Merge failed for issue #%d: %s", issue.number, e)
+        finally:
+            async with self._lock:
+                self._state.claimed.discard(issue.id)
+
+    async def _watch_conflict_queue(self) -> None:
+        while True:
+            try:
+                await self._watch_conflict_queue_tick()
+            except Exception as e:
+                logger.warning("watch_conflict_queue tick failed: %s", e)
+            await asyncio.sleep(self._config.polling.interval_ms / 1000)
+
+    async def _watch_conflict_queue_tick(self) -> None:
+        if not self._config.rebase:
+            return
+        rebase_cfg = self._config.rebase
+        conflict_issues = await self._github.fetch_issues_by_label(rebase_cfg.conflict_label)
+        async with self._lock:
+            candidate = None
+            for issue in conflict_issues:
+                if issue.id not in self._state.claimed:
+                    self._state.claimed.add(issue.id)
+                    candidate = issue
+                    break
+        if candidate is not None:
+            asyncio.create_task(self._run_rebase_worker(candidate))
+
+    async def _run_rebase_worker(self, issue: Issue) -> None:
+        assert self._config.rebase is not None
+        rebase_cfg = self._config.rebase
+        try:
+            worker = RebaseWorker(self._workspace, self._github, self._config)
+
+            def _on_event(event: dict) -> None:
+                session = self._state.running.get(issue.id)
+                if session:
+                    session.last_event_at = datetime.now(tz=timezone.utc)
+
+            success = await worker.run(issue, on_event=_on_event)
+
+            if success:
+                await self._github.remove_label(issue.number, rebase_cfg.conflict_label)
+                if self._config.review:
+                    await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
+                logger.info("Rebase succeeded for issue #%d, re-queued for review", issue.number)
+            else:
+                logger.warning("Rebase failed for issue #%d, will retry next poll", issue.number)
+        except Exception as e:
+            logger.error("Rebase worker error for issue #%d: %s", issue.number, e)
         finally:
             async with self._lock:
                 self._state.claimed.discard(issue.id)
