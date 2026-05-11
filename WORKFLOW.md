@@ -39,7 +39,7 @@ review:
   needs_revision_label: scale:needs-revision
   conflict_label: scale:conflict
   merge_label: scale:merge
-  feedback_enabled: false
+  feedback_enabled: true
 
 triage:
   model: claude-haiku-4-5-20251001
