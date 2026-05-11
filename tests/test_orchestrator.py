@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from scale.orchestrator.core import Orchestrator
 from scale.orchestrator.state import CompletedSession, LiveSession, RetryEntry, TokenTotals
-from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig, PollingConfig, TriageConfig, ReviewConfig
+from scale.config.schema import WorkflowConfig, TrackerConfig, AgentConfig, WorkerConfig, PlannerConfig, PollingConfig, TriageConfig, ReviewConfig, RebaseConfig
 from scale.tracker.models import Issue
 from scale.worker.local import LocalWorker
 from scale.worker.ssh import SSHWorker
@@ -29,11 +29,12 @@ def _config_ssh(*hosts: str) -> WorkflowConfig:
         prompt_template="Work on {{ issue.title }}.",
     )
 
-def _issue(id_="i1", number=1, state="active") -> Issue:
+def _issue(id_="i1", number=1, state="active", labels=None) -> Issue:
     return Issue(
         id=id_, identifier=f"o/r#{number}", number=number,
         title="T", description="", state=state,
-        labels=[], branch_name="symphony/1-t",
+        labels=labels if labels is not None else [],
+        branch_name="symphony/1-t",
         url="https://example.com", priority=None,
         created_at=datetime(2026, 1, 1),
         updated_at=datetime(2026, 1, 1),
@@ -1811,3 +1812,113 @@ async def test_run_feedback_worker_clears_secondary_on_error():
         await orch._run_feedback_worker(issue, comments=[{"body": "fix this"}])
 
     assert issue.id not in orch._state.secondary
+
+
+# ---------------------------------------------------------------------------
+# _watch_conflict_queue / _run_rebase_worker
+# ---------------------------------------------------------------------------
+
+def _config_with_rebase(**kwargs) -> WorkflowConfig:
+    return WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        polling=PollingConfig(interval_ms=0),
+        rebase=RebaseConfig(template="Rebase {{ issue.number }}", **kwargs),
+        review=ReviewConfig(),
+        prompt_template="Work on {{ issue.title }}.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_watch_conflict_queue_tick_claims_one_issue():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker)
+    orch._github = AsyncMock()
+
+    issue1 = _issue(1, labels=["scale:conflict"])
+    issue2 = _issue(2, labels=["scale:conflict"])
+    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue1, issue2])
+
+    with patch.object(orch, "_run_rebase_worker", AsyncMock()) as mock_run:
+        await orch._watch_conflict_queue_tick()
+        await asyncio.sleep(0)
+
+    assert mock_run.call_count == 1
+    assert issue1.id in orch._state.claimed or issue2.id in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_watch_conflict_queue_tick_skips_claimed():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker)
+    orch._github = AsyncMock()
+
+    issue = _issue(1, labels=["scale:conflict"])
+    orch._state.claimed.add(issue.id)
+    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
+
+    with patch.object(orch, "_run_rebase_worker", AsyncMock()) as mock_run:
+        await orch._watch_conflict_queue_tick()
+        await asyncio.sleep(0)
+
+    mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_rebase_worker_removes_conflict_label_on_success():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker)
+    orch._github = AsyncMock()
+    issue = _issue(1, labels=["scale:conflict"])
+
+    with patch("scale.orchestrator.core.RebaseWorker") as MockWorker:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(return_value=True)
+        MockWorker.return_value = mock_instance
+        await orch._run_rebase_worker(issue)
+
+    orch._github.remove_label.assert_called_with(issue.number, "scale:conflict")
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_run_rebase_worker_keeps_conflict_label_on_failure():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker)
+    orch._github = AsyncMock()
+    issue = _issue(1, labels=["scale:conflict"])
+
+    with patch("scale.orchestrator.core.RebaseWorker") as MockWorker:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(return_value=False)
+        MockWorker.return_value = mock_instance
+        await orch._run_rebase_worker(issue)
+
+    orch._github.remove_label.assert_not_called()
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_run_adds_conflict_queue_task_when_rebase_configured():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues = AsyncMock(return_value=[])
+    orch = Orchestrator(_config_with_rebase(), tracker)
+
+    conflict_started = False
+
+    async def _mock_conflict_queue():
+        nonlocal conflict_started
+        conflict_started = True
+        await asyncio.sleep(0)
+
+    async def _mock_tick():
+        await asyncio.sleep(0)
+
+    async def _mock_merge_queue():
+        await asyncio.sleep(0)
+
+    with patch.object(orch, "_tick_loop", side_effect=_mock_tick), \
+         patch.object(orch, "_watch_merge_queue", side_effect=_mock_merge_queue), \
+         patch.object(orch, "_watch_conflict_queue", side_effect=_mock_conflict_queue):
+        await orch.run()
+
+    assert conflict_started
