@@ -44,15 +44,18 @@ Request changes (add `scale:needs-revision`) and leave a comment explaining what
 
 ## How to respond
 
+You are running in a temporary directory without repo access. You cannot run `gh` commands. Instead, end your response with a structured verdict on the last line in exactly one of these two formats:
+
 If the PR looks good:
-```bash
-gh issue edit {{ issue.number }} --add-label "scale:merge" --remove-label "scale:pr-open"
+```
+VERDICT: APPROVE
 ```
 
 If changes are needed:
-```bash
-gh pr comment {{ pr.number }} --body "..."
-gh issue edit {{ issue.number }} --add-label "scale:needs-revision" --remove-label "scale:pr-open"
 ```
+VERDICT: REQUEST_CHANGES: <one concise sentence explaining what must be fixed>
+```
+
+Write your full review reasoning before the VERDICT line. The VERDICT line must be the last line of your response and must start with `VERDICT: `.
 
 Be concise. Only flag real problems — not style preferences or hypothetical issues.

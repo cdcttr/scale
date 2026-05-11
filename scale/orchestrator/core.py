@@ -577,17 +577,34 @@ class Orchestrator:
             pr_url: str = pr["html_url"]
             pr_diff = await self._github.fetch_pr_diff(pr_number)
             worker = ReviewWorker(self._config)
-            await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
-            if self._config.agent.auto_merge:
-                await self._try_auto_merge(issue, pr_number)
-            if self._config.tracker.terminal_labels:
-                await self._github.add_labels(
-                    issue.number, [self._config.tracker.terminal_labels[0]]
+            result = await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
+
+            verdict_line = result.message.strip().splitlines()[-1] if result.message else ""
+            if verdict_line.startswith("VERDICT: APPROVE"):
+                await self._github.post_comment(
+                    issue.number, f"**Review:** Approved.\n\n{result.message}"
                 )
-            await self._github.remove_label(issue.number, review.pr_open_label)
+                await self._github.add_labels(issue.number, [review.merge_label])
+                await self._github.remove_label(issue.number, review.pr_open_label)
+                logger.info("Reviewer approved PR #%d for issue #%d", pr_number, issue.number)
+            elif verdict_line.startswith("VERDICT: REQUEST_CHANGES:"):
+                reason = verdict_line[len("VERDICT: REQUEST_CHANGES:"):].strip()
+                await self._github.post_comment(
+                    issue.number, f"**Review:** Changes requested — {reason}\n\n{result.message}"
+                )
+                await self._github.add_labels(issue.number, [review.needs_revision_label])
+                await self._github.remove_label(issue.number, review.pr_open_label)
+                logger.info(
+                    "Reviewer requested changes on PR #%d for issue #%d: %s",
+                    pr_number, issue.number, reason,
+                )
+            else:
+                logger.warning(
+                    "Reviewer returned no valid verdict for issue #%d, leaving labels unchanged",
+                    issue.number,
+                )
         except Exception as e:
             logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
-            await self._github.add_labels(issue.number, [review.conflict_label])
             await self._github.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
