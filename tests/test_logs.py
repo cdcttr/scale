@@ -277,12 +277,12 @@ def test_fmt_prefix_consistent_width():
     assert len(_fmt_prefix(None, 0)) == len(_fmt_prefix(99.0, 14200))
 
 
-def test_format_event_uses_cumulative_tokens_parameter():
+def test_format_event_uses_total_tokens_parameter():
     event = _assistant(
         [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
         usage={"input_tokens": 1000, "output_tokens": 500},
     )
-    lines = _format_event(event, turn=1, cumulative_tokens=1500)
+    lines = _format_event(event, turn=1, total_tokens=1500)
     assert len(lines) == 1
     assert "1.5k tokens" in lines[0]
 
@@ -294,7 +294,7 @@ def test_format_event_elapsed_appears_on_first_line_only():
             {"type": "text", "text": "Done"},
         ],
     )
-    lines = _format_event(event, turn=1, elapsed_s=8.0, cumulative_tokens=1000)
+    lines = _format_event(event, turn=1, elapsed_s=8.0, total_tokens=1000)
     assert len(lines) == 2
     assert "8s" in lines[0]
     assert "1.0k tokens" in lines[0]
@@ -396,3 +396,34 @@ def test_log_reader_accumulates_tokens_across_turns(tmp_path):
     turn2_line = next(l for l in lines if "[turn 2]" in l)
     assert "1.5k tokens" in turn1_line
     assert "1.8k tokens" in turn2_line
+
+
+# --- cumulative token tracking: _format_event API ---
+
+def test_format_event_total_tokens_overrides_event_usage():
+    event = _assistant(
+        [{"type": "text", "text": "Hello"}],
+        usage={"input_tokens": 100, "output_tokens": 50},
+    )
+    lines = _format_event(event, turn=1, total_tokens=2000)
+    assert "2.0k tokens" in lines[0]
+
+
+def test_format_event_total_tokens_used_when_event_has_no_usage():
+    event = _assistant([{"type": "text", "text": "Hello"}])
+    lines = _format_event(event, turn=1, total_tokens=1500)
+    assert "1.5k tokens" in lines[0]
+
+
+def test_iter_formatted_no_usage_anywhere_shows_zero(tmp_path):
+    events = [
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "Hi"}],
+        }},
+        {"type": "result", "subtype": "success", "num_turns": 1},
+    ]
+    log = _make_log(tmp_path, events)
+    reader = LogReader(log)
+    lines = list(reader.iter_formatted())
+    turn_line = next(l for l in lines if "[turn 1]" in l)
+    assert "0.0k tokens" in turn_line
