@@ -7,8 +7,6 @@ tracker:
     - scale:ready                  # issues Scale will pick up
   skip_labels:
     - scale:skip
-    - scale:concept
-    - scale:planned
   terminal_labels:
     - scale:done
 

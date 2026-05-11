@@ -7,6 +7,14 @@ from scale.tracker.models import Issue
 
 _NO_PRIORITY = 999
 
+_SCALE_INELIGIBLE_LABELS = frozenset({
+    "scale:pr-open",
+    "scale:needs-revision",
+    "scale:merge",
+    "scale:concept",
+    "scale:planned",
+})
+
 
 def is_eligible(
     issue: Issue, state: OrchestratorState, config: WorkflowConfig
@@ -14,6 +22,8 @@ def is_eligible(
     if issue.state != "active":
         return False
     if issue.id in state.claimed or issue.id in state.running:
+        return False
+    if _SCALE_INELIGIBLE_LABELS & set(issue.labels or []):
         return False
     if config.agent.supervised_label in (issue.labels or []):
         return False

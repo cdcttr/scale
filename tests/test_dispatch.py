@@ -99,3 +99,24 @@ def test_supervised_label_not_blocked_by_other_label():
     issue = _issue()
     issue.labels = ["scale:ready"]
     assert is_eligible(issue, state, cfg) is True
+
+@pytest.mark.parametrize("label", [
+    "scale:pr-open",
+    "scale:needs-revision",
+    "scale:merge",
+    "scale:concept",
+    "scale:planned",
+])
+def test_ineligible_when_scale_owned_label(label):
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5)
+    issue = _issue()
+    issue.labels = [label]
+    assert is_eligible(issue, state, cfg) is False
+
+def test_scale_owned_labels_block_regardless_of_skip_labels():
+    state = OrchestratorState()
+    cfg = _config(max_concurrent_agents=5)
+    issue = _issue()
+    issue.labels = ["scale:pr-open", "scale:ready"]
+    assert is_eligible(issue, state, cfg) is False
