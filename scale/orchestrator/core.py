@@ -569,6 +569,8 @@ class Orchestrator:
         try:
             pr = await self._github.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
+                pr = await self._github.fetch_pr_for_issue(issue.number)
+            if pr is None:
                 logger.warning("No open PR found for issue #%d, skipping review", issue.number)
                 return
             pr_number: int = pr["number"]

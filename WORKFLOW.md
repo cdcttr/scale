@@ -30,6 +30,14 @@ agent:
   max_concurrent_agents: 2
   max_turns: 20
 
+review:
+  model: claude-haiku-4-5-20251001
+  pr_open_label: scale:pr-open
+  needs_revision_label: scale:needs-revision
+  conflict_label: scale:conflict
+  merge_label: scale:merge
+  feedback_enabled: false
+
 triage:
   model: claude-haiku-4-5-20251001
 
