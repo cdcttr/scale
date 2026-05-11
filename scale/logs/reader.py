@@ -25,14 +25,16 @@ def _format_event(
     turn: int,
     elapsed_s: float | None = None,
     total_s: float | None = None,
+    total_tokens: int | None = None,
 ) -> list[str]:
     etype = event.get("type")
 
     if etype == "assistant":
         message = event.get("message", {})
         content = message.get("content", [])
-        usage = message.get("usage") or {}
-        total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        if total_tokens is None:
+            usage = message.get("usage") or {}
+            total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         prefix = _fmt_prefix(elapsed_s, total_tokens)
         pad = " " * len(prefix)
 
@@ -91,6 +93,7 @@ class LogReader:
 
     def iter_formatted(self) -> Generator[str, None, None]:
         turn = 0
+        cumulative_tokens = 0
         for raw_line in self._path.read_text().splitlines():
             raw_line = raw_line.strip()
             if not raw_line:
@@ -102,13 +105,16 @@ class LogReader:
             etype = event.get("type")
             if etype == "assistant":
                 turn += 1
-                yield from _format_event(event, turn)
+                usage = (event.get("message") or {}).get("usage") or {}
+                cumulative_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                yield from _format_event(event, turn, total_tokens=cumulative_tokens)
             elif etype == "result":
                 yield from _format_event(event, turn)
 
     async def tail(self, workspace_dir: Path | None = None) -> None:
         turn = 0
         seen_bytes = 0
+        cumulative_tokens = 0
         session_start = time.monotonic()
         last_turn_time = session_start
 
@@ -136,10 +142,12 @@ class LogReader:
                 etype = event.get("type")
                 if etype == "assistant":
                     turn += 1
+                    usage = (event.get("message") or {}).get("usage") or {}
+                    cumulative_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                     now = time.monotonic()
                     elapsed_s = now - last_turn_time
                     last_turn_time = now
-                    for line in _format_event(event, turn, elapsed_s=elapsed_s):
+                    for line in _format_event(event, turn, elapsed_s=elapsed_s, total_tokens=cumulative_tokens):
                         print(line)
                 elif etype == "result":
                     total_s = time.monotonic() - session_start
