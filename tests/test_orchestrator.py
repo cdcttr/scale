@@ -1689,6 +1689,7 @@ async def test_merge_issue_skips_when_no_pr_found():
     orch = Orchestrator(_config_with_review(), tracker)
     orch._github = AsyncMock()
     orch._github.fetch_pr_for_branch = AsyncMock(return_value=None)
+    orch._github.fetch_pr_for_issue = AsyncMock(return_value=None)
     orch._github.merge_pr = AsyncMock()
 
     issue = _issue()
