@@ -9,6 +9,9 @@ tracker:
     - scale:skip
     - scale:concept
     - scale:planned
+    - scale:pr-open
+    - scale:needs-revision
+    - scale:merge
   terminal_labels:
     - scale:done
 
