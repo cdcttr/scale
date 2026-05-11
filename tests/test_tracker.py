@@ -332,6 +332,9 @@ async def test_fetch_pr_checks_returns_empty_when_no_runs():
 @respx.mock
 async def test_merge_pr_sends_squash_request():
     import json as _json
+    respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(
+        return_value=httpx.Response(200, json={"mergeable": True})
+    )
     route = respx.put("https://api.github.com/repos/owner/repo/pulls/7/merge").mock(
         return_value=httpx.Response(200, json={"merged": True})
     )

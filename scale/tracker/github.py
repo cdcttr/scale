@@ -315,6 +315,18 @@ class GitHubClient(TrackerClient):
 
     async def merge_pr(self, pr_number: int) -> None:
         async with httpx.AsyncClient(timeout=30) as client:
+            # GET the PR first to trigger GitHub's async mergeability computation.
+            # Without this, the PUT may return 405 when mergeable is still UNKNOWN.
+            for attempt in range(6):
+                r = await client.get(
+                    f"{self._base}/pulls/{pr_number}",
+                    headers=self._headers,
+                )
+                r.raise_for_status()
+                if r.json().get("mergeable") is not None:
+                    break
+                await asyncio.sleep(2**attempt)
+
             r = await client.put(
                 f"{self._base}/pulls/{pr_number}/merge",
                 headers=self._headers,
