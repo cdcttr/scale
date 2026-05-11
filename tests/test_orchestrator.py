@@ -1705,3 +1705,103 @@ async def test_merge_issue_releases_claim_on_error():
     await orch._merge_issue(issue)  # must not raise
 
     assert issue.id not in orch._state.claimed
+
+
+# ---------------------------------------------------------------------------
+# Secondary session tracking (review / feedback workers)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_reviewer_sets_secondary_during_run():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker)
+    orch._github = AsyncMock()
+    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch._github.add_labels = AsyncMock()
+    orch._github.remove_label = AsyncMock()
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+    secondary_during: list[str] = []
+
+    async def _mock_run(*args, **kwargs):
+        if issue.id in orch._state.secondary:
+            secondary_during.append(orch._state.secondary[issue.id].kind)
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
+        mock_rw = MagicMock()
+        mock_rw.run = _mock_run
+        MockRW.return_value = mock_rw
+        await orch._run_reviewer(issue)
+
+    assert secondary_during == ["review"]
+    assert issue.id not in orch._state.secondary
+
+
+@pytest.mark.asyncio
+async def test_run_reviewer_clears_secondary_on_error():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker)
+    orch._github = AsyncMock()
+    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch._github.add_labels = AsyncMock()
+    orch._github.remove_label = AsyncMock()
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
+        mock_rw = MagicMock()
+        mock_rw.run = AsyncMock(side_effect=RuntimeError("review failed"))
+        MockRW.return_value = mock_rw
+        await orch._run_reviewer(issue)
+
+    assert issue.id not in orch._state.secondary
+
+
+@pytest.mark.asyncio
+async def test_run_feedback_worker_sets_secondary_during_run():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker)
+    orch._github = AsyncMock()
+    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
+    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+    secondary_during: list[str] = []
+
+    async def _mock_run(*args, **kwargs):
+        if issue.id in orch._state.secondary:
+            secondary_during.append(orch._state.secondary[issue.id].kind)
+
+    with patch("scale.orchestrator.core.FeedbackWorker") as MockFW:
+        mock_fw = MagicMock()
+        mock_fw.run = _mock_run
+        MockFW.return_value = mock_fw
+        await orch._run_feedback_worker(issue, comments=[{"body": "fix this"}])
+
+    assert secondary_during == ["feedback"]
+    assert issue.id not in orch._state.secondary
+
+
+@pytest.mark.asyncio
+async def test_run_feedback_worker_clears_secondary_on_error():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker)
+    orch._github = AsyncMock()
+    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
+    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.FeedbackWorker") as MockFW:
+        mock_fw = MagicMock()
+        mock_fw.run = AsyncMock(side_effect=RuntimeError("feedback crashed"))
+        MockFW.return_value = mock_fw
+        await orch._run_feedback_worker(issue, comments=[{"body": "fix this"}])
+
+    assert issue.id not in orch._state.secondary

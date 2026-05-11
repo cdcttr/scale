@@ -9,7 +9,7 @@ from typing import Callable, Optional
 from scale.config.schema import WorkflowConfig
 from scale.orchestrator.dispatch import is_eligible, sort_issues, retry_delay_ms
 from scale.orchestrator.state import (
-    CompletedSession, LiveSession, OrchestratorState, RetryEntry, TokenTotals,
+    CompletedSession, LiveSession, OrchestratorState, RetryEntry, SecondarySession, TokenTotals,
 )
 from scale.tracker.base import TrackerClient
 from scale.tracker.github import GitHubClient
@@ -564,6 +564,8 @@ class Orchestrator:
     async def _run_reviewer(self, issue: Issue) -> None:
         assert self._config.review is not None
         review = self._config.review
+        async with self._lock:
+            self._state.secondary[issue.id] = SecondarySession(issue=issue, kind="review")
         try:
             pr = await self._github.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
@@ -587,6 +589,7 @@ class Orchestrator:
             await self._github.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
+                self._state.secondary.pop(issue.id, None)
                 self._state.claimed.discard(issue.id)
 
     async def _watch_planned(self) -> None:
@@ -640,6 +643,8 @@ class Orchestrator:
             asyncio.create_task(self._run_feedback_worker(issue, human_comments))
 
     async def _run_feedback_worker(self, issue: Issue, comments: list[dict]) -> None:
+        async with self._lock:
+            self._state.secondary[issue.id] = SecondarySession(issue=issue, kind="feedback")
         try:
             pr = await self._github.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
@@ -653,6 +658,8 @@ class Orchestrator:
             logger.error("Feedback worker failed for issue #%d: %s", issue.number, e)
         finally:
             self._state.pr_comment_watermarks[issue.number] = datetime.now(tz=timezone.utc)
+            async with self._lock:
+                self._state.secondary.pop(issue.id, None)
             self._state.claimed.discard(issue.id)
 
     async def _try_auto_merge(self, issue: Issue, pr_number: int) -> None:

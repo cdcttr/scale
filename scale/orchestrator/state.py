@@ -46,6 +46,13 @@ class CompletedSession:
 
 
 @dataclass
+class SecondarySession:
+    issue: Issue
+    kind: str  # "review" | "feedback" | "rebase"
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class OrchestratorState:
     running: dict[str, LiveSession] = field(default_factory=dict)
     claimed: set[str] = field(default_factory=set)
@@ -54,3 +61,4 @@ class OrchestratorState:
     token_totals: TokenTotals = field(default_factory=TokenTotals)
     total_completed: int = 0
     pr_comment_watermarks: dict[int, datetime] = field(default_factory=dict)
+    secondary: dict[str, SecondarySession] = field(default_factory=dict)

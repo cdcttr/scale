@@ -78,6 +78,18 @@ def _build_table(orch: "Orchestrator") -> Table:
                 f"{d}{_elapsed(session.started_at)}{e}",
             )
 
+    if state.secondary:
+        table.add_row("", "", "", "", "", "")
+        table.add_row("", Text("REVIEWING", style="bold underline"), "", "", "", "")
+        for sess in state.secondary.values():
+            table.add_row(
+                f"#{sess.issue.number}",
+                sess.issue.title[:60],
+                sess.kind,
+                "", "",
+                _elapsed(sess.started_at),
+            )
+
     if state.retry_queue:
         table.add_row("", "", "", "", "", "")
         table.add_row("", Text("RETRYING", style="bold underline"), "", "", "", "")
