@@ -722,12 +722,10 @@ class Orchestrator:
         if not self._config.review:
             return
         review = self._config.review
-        pr_open_issues = await self._github.fetch_issues_by_label(review.pr_open_label)
+        merge_issues = await self._github.fetch_issues_by_label(review.merge_label)
         async with self._lock:
             candidates = []
-            for issue in pr_open_issues:
-                if review.merge_label not in (issue.labels or []):
-                    continue
+            for issue in merge_issues:
                 if issue.id in self._state.claimed:
                     continue
                 self._state.claimed.add(issue.id)
