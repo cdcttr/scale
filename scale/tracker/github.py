@@ -33,6 +33,7 @@ class GitHubClient(TrackerClient):
         owner, repo = config.repo.split('/', 1)
         self._owner = owner
         self._base = f"https://api.github.com/repos/{owner}/{repo}"
+        self._default_branch = config.default_branch
         self._headers = {
             "Authorization": f"Bearer {config.api_token}",
             "Accept": "application/vnd.github+json",
@@ -312,6 +313,22 @@ class GitHubClient(TrackerClient):
                     break
                 page += 1
         return runs
+
+    async def fetch_conflict_context(self, branch_name: str) -> str:
+        url = f"{self._base}/compare/{branch_name}...{self._default_branch}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=self._headers)
+            r.raise_for_status()
+        data = r.json()
+        commits = data.get("commits", [])
+        if not commits:
+            return "(no commits found on main since branch diverged)"
+        lines = []
+        for c in commits:
+            sha = c.get("sha", "")[:7]
+            msg = c.get("commit", {}).get("message", "").splitlines()[0]
+            lines.append(f"{sha} {msg}")
+        return "\n".join(lines)
 
     async def merge_pr(self, pr_number: int) -> None:
         async with httpx.AsyncClient(timeout=30) as client:

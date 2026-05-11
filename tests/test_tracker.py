@@ -343,3 +343,33 @@ async def test_merge_pr_sends_squash_request():
     assert route.called
     sent = _json.loads(route.calls[0].request.content)
     assert sent["merge_method"] == "squash"
+
+
+@pytest.mark.asyncio
+async def test_fetch_conflict_context_returns_formatted_commits():
+    with respx.mock:
+        respx.get("https://api.github.com/repos/owner/repo/compare/symphony/5-caching...main").mock(
+            return_value=httpx.Response(200, json={
+                "commits": [
+                    {"sha": "abc1234567", "commit": {"message": "Add rate limiting\n\nMore detail"}},
+                    {"sha": "def9876543", "commit": {"message": "Rename auth module"}},
+                ]
+            })
+        )
+        gh = GitHubClient(_config())
+        result = await gh.fetch_conflict_context("symphony/5-caching")
+    assert "abc1234" in result
+    assert "Add rate limiting" in result
+    assert "def9876" in result
+    assert "Rename auth module" in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_conflict_context_empty_returns_message():
+    with respx.mock:
+        respx.get("https://api.github.com/repos/owner/repo/compare/symphony/5-caching...main").mock(
+            return_value=httpx.Response(200, json={"commits": []})
+        )
+        gh = GitHubClient(_config())
+        result = await gh.fetch_conflict_context("symphony/5-caching")
+    assert "no commits" in result
