@@ -606,9 +606,11 @@ class Orchestrator:
                 )
             else:
                 logger.warning(
-                    "Reviewer returned no valid verdict for issue #%d, leaving labels unchanged",
-                    issue.number,
+                    "Reviewer returned no valid verdict for issue #%d, applying %s",
+                    issue.number, review.no_verdict_label,
                 )
+                await self._github.add_labels(issue.number, [review.no_verdict_label])
+                await self._github.remove_label(issue.number, review.pr_open_label)
         except Exception as e:
             logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
             await self._github.remove_label(issue.number, review.pr_open_label)
