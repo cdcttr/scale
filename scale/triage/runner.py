@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scale.config.schema import CodexConfig, TriageConfig
-from scale.tracker.github import GitHubClient
+from scale.tracker.base import TrackerClient
 from scale.tracker.models import Issue
 from scale.triage.agent import TriageAgent, TriageAssessment
 
@@ -57,7 +57,7 @@ class TriageRunner:
         self,
         config: TriageConfig,
         codex: CodexConfig,
-        client: GitHubClient,
+        client: TrackerClient,
         dry_run: bool = False,
     ) -> None:
         self._config = config

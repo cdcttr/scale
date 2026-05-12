@@ -98,7 +98,6 @@ async def test_token_totals_accumulated_on_success():
     orch._state.claimed.add(issue.id)
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -131,7 +130,6 @@ async def test_token_totals_accumulate_across_sessions():
                 on_event({"type": "assistant", "message": {"usage": {"input_tokens": _i, "output_tokens": _o}}})
 
         with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-             patch.object(orch._github, "add_labels", AsyncMock()), \
              patch.object(orch._workspace, "remove", AsyncMock()):
             mock_w = MagicMock()
             mock_w.run = _mock_run
@@ -391,6 +389,7 @@ async def test_on_event_accumulates_tokens_across_multiple_assistant_events():
         MockWorker.return_value = mock_w
         await orch._run_worker(issue, attempt=None)
 
+    await orch._flush_finishing()
     assert orch._state.token_totals.input_tokens == 300
     assert orch._state.token_totals.output_tokens == 130
 
@@ -596,8 +595,7 @@ async def test_tick_dispatches_issues_with_triage_label_to_triage_runner():
 
     with patch("scale.orchestrator.core.TriageRunner"):
         orch = Orchestrator(_config_with_triage(), tracker)
-        orch._github = AsyncMock()
-        orch._github.fetch_open_issues.return_value = [issue]
+        tracker.fetch_open_issues.return_value = [issue]
         with patch.object(orch, "_run_triage", AsyncMock()) as mock_run_triage:
             await orch._tick()
             await asyncio.sleep(0)
@@ -750,7 +748,6 @@ async def test_run_worker_sets_finishing_on_success():
     orch._state.claimed.add(issue.id)
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -780,7 +777,6 @@ async def test_completed_session_appended_on_success():
     orch._state.claimed.add(issue.id)
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -813,7 +809,6 @@ async def test_total_completed_incremented_on_success():
     orch._state.claimed.add(issue.id)
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -979,8 +974,6 @@ async def test_tick_summary_counts_are_accurate(caplog):
 async def test_record_stats_posts_github_comment(tmp_path):
     tracker = AsyncMock()
     orch = Orchestrator(_config(), tracker)
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock()
 
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
@@ -992,8 +985,8 @@ async def test_record_stats_posts_github_comment(tmp_path):
     with patch("scale.orchestrator.core.Path", return_value=tmp_path / "stats.jsonl"):
         await orch._record_stats(issue, session, success=True, attempt=None)
 
-    orch._github.post_comment.assert_called_once()
-    call_args = orch._github.post_comment.call_args
+    tracker.post_comment.assert_called_once()
+    call_args = tracker.post_comment.call_args
     assert call_args[0][0] == issue.number
     body = call_args[0][1]
     assert "<!-- scale-stats" in body
@@ -1006,8 +999,6 @@ async def test_record_stats_posts_github_comment(tmp_path):
 async def test_record_stats_writes_to_stats_jsonl(tmp_path):
     tracker = AsyncMock()
     orch = Orchestrator(_config(), tracker)
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock()
 
     issue = _issue(number=42)
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1036,8 +1027,6 @@ async def test_record_stats_writes_to_stats_jsonl(tmp_path):
 async def test_record_stats_includes_failure_flag(tmp_path):
     tracker = AsyncMock()
     orch = Orchestrator(_config(), tracker)
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock()
 
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1052,7 +1041,7 @@ async def test_record_stats_includes_failure_flag(tmp_path):
     assert record["success"] is False
     assert record["attempt"] == 2
 
-    body = orch._github.post_comment.call_args[0][1]
+    body = tracker.post_comment.call_args[0][1]
     assert '"success": false' in body
 
 
@@ -1075,8 +1064,6 @@ async def test_record_stats_called_on_worker_success(tmp_path):
     stats_file = tmp_path / "stats.jsonl"
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()), \
          patch("scale.orchestrator.core.Path", return_value=stats_file):
         mock_w = MagicMock()
@@ -1109,7 +1096,6 @@ async def test_record_stats_called_on_worker_failure(tmp_path):
     stats_file = tmp_path / "stats.jsonl"
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch("scale.orchestrator.core.Path", return_value=stats_file):
         mock_w = MagicMock()
         mock_w.run = _mock_run_fail
@@ -1124,9 +1110,8 @@ async def test_record_stats_called_on_worker_failure(tmp_path):
 @pytest.mark.asyncio
 async def test_record_stats_github_failure_does_not_crash(tmp_path):
     tracker = AsyncMock()
+    tracker.post_comment = AsyncMock(side_effect=RuntimeError("network error"))
     orch = Orchestrator(_config(), tracker)
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock(side_effect=RuntimeError("network error"))
 
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
@@ -1145,13 +1130,13 @@ async def test_record_stats_github_failure_does_not_crash(tmp_path):
 
 @pytest.mark.asyncio
 async def test_fetch_previous_attempt_summary_returns_latest_summary_comment():
-    orch = Orchestrator(_config(), AsyncMock())
-    issue = _issue()
-    orch._github = AsyncMock()
-    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+    tracker = AsyncMock()
+    tracker.fetch_issue_comments = AsyncMock(return_value=[
         {"body": "Some other comment"},
         {"body": "<!-- scale-attempt-summary -->\n\n## Scale attempt 1 summary\nFiles: foo.py"},
     ])
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
 
     result = await orch._fetch_previous_attempt_summary(issue)
 
@@ -1162,12 +1147,12 @@ async def test_fetch_previous_attempt_summary_returns_latest_summary_comment():
 
 @pytest.mark.asyncio
 async def test_fetch_previous_attempt_summary_returns_none_when_no_summary():
-    orch = Orchestrator(_config(), AsyncMock())
-    issue = _issue()
-    orch._github = AsyncMock()
-    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+    tracker = AsyncMock()
+    tracker.fetch_issue_comments = AsyncMock(return_value=[
         {"body": "Just a regular comment"},
     ])
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
 
     result = await orch._fetch_previous_attempt_summary(issue)
 
@@ -1176,13 +1161,13 @@ async def test_fetch_previous_attempt_summary_returns_none_when_no_summary():
 
 @pytest.mark.asyncio
 async def test_fetch_previous_attempt_summary_returns_most_recent():
-    orch = Orchestrator(_config(), AsyncMock())
-    issue = _issue()
-    orch._github = AsyncMock()
-    orch._github.fetch_issue_comments = AsyncMock(return_value=[
+    tracker = AsyncMock()
+    tracker.fetch_issue_comments = AsyncMock(return_value=[
         {"body": "<!-- scale-attempt-summary -->\nAttempt 1: modified alpha.py"},
         {"body": "<!-- scale-attempt-summary -->\nAttempt 2: modified beta.py"},
     ])
+    orch = Orchestrator(_config(), tracker)
+    issue = _issue()
 
     result = await orch._fetch_previous_attempt_summary(issue)
 
@@ -1192,10 +1177,10 @@ async def test_fetch_previous_attempt_summary_returns_most_recent():
 
 @pytest.mark.asyncio
 async def test_fetch_previous_attempt_summary_handles_github_error():
-    orch = Orchestrator(_config(), AsyncMock())
+    tracker = AsyncMock()
+    tracker.fetch_issue_comments = AsyncMock(side_effect=RuntimeError("network"))
+    orch = Orchestrator(_config(), tracker)
     issue = _issue()
-    orch._github = AsyncMock()
-    orch._github.fetch_issue_comments = AsyncMock(side_effect=RuntimeError("network"))
 
     result = await orch._fetch_previous_attempt_summary(issue)
 
@@ -1204,14 +1189,12 @@ async def test_fetch_previous_attempt_summary_handles_github_error():
 
 @pytest.mark.asyncio
 async def test_post_attempt_summary_posts_comment_with_marker():
-    orch = Orchestrator(_config(), AsyncMock())
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
     session = LiveSession(issue=issue, task=task)
     session.turn_count = 3
-
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock()
 
     with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
         "modified_files": ["scale/foo.py"],
@@ -1220,8 +1203,8 @@ async def test_post_attempt_summary_posts_comment_with_marker():
     })):
         await orch._post_attempt_summary(issue, session, attempt=None)
 
-    orch._github.post_comment.assert_called_once()
-    body = orch._github.post_comment.call_args[0][1]
+    tracker.post_comment.assert_called_once()
+    body = tracker.post_comment.call_args[0][1]
     assert "<!-- scale-attempt-summary -->" in body
     assert "scale/foo.py" in body
     assert "abc1234" in body
@@ -1229,13 +1212,11 @@ async def test_post_attempt_summary_posts_comment_with_marker():
 
 @pytest.mark.asyncio
 async def test_post_attempt_summary_handles_missing_workspace():
-    orch = Orchestrator(_config(), AsyncMock())
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
     session = LiveSession(issue=issue, task=task)
-
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock()
 
     with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
         "modified_files": [],
@@ -1244,20 +1225,19 @@ async def test_post_attempt_summary_handles_missing_workspace():
     })):
         await orch._post_attempt_summary(issue, session, attempt=None)
 
-    orch._github.post_comment.assert_called_once()
-    body = orch._github.post_comment.call_args[0][1]
+    tracker.post_comment.assert_called_once()
+    body = tracker.post_comment.call_args[0][1]
     assert "<!-- scale-attempt-summary -->" in body
 
 
 @pytest.mark.asyncio
 async def test_post_attempt_summary_github_failure_does_not_raise():
-    orch = Orchestrator(_config(), AsyncMock())
+    tracker = AsyncMock()
+    tracker.post_comment = AsyncMock(side_effect=RuntimeError("network"))
+    orch = Orchestrator(_config(), tracker)
     issue = _issue()
     task = asyncio.create_task(asyncio.sleep(0))
     session = LiveSession(issue=issue, task=task)
-
-    orch._github = AsyncMock()
-    orch._github.post_comment = AsyncMock(side_effect=RuntimeError("network"))
 
     with patch.object(orch, "_collect_workspace_state", AsyncMock(return_value={
         "modified_files": [],
@@ -1288,8 +1268,6 @@ async def test_run_worker_passes_previous_summary_on_retry(tmp_path):
     stats_file = tmp_path / "stats.jsonl"
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()), \
          patch.object(orch, "_fetch_previous_attempt_summary",
                       AsyncMock(return_value="Previous: foo.py modified")), \
@@ -1324,8 +1302,6 @@ async def test_run_worker_no_previous_summary_on_first_attempt(tmp_path):
     stats_file = tmp_path / "stats.jsonl"
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", AsyncMock()), \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch.object(orch._workspace, "remove", AsyncMock()), \
          patch("scale.orchestrator.core.Path", return_value=stats_file):
         mock_w = MagicMock()
@@ -1358,7 +1334,6 @@ async def test_run_worker_posts_attempt_summary_on_failure(tmp_path):
 
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
          patch.object(orch, "_post_attempt_summary", post_summary_mock), \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
          patch("scale.orchestrator.core.Path", return_value=stats_file):
         mock_w = MagicMock()
         mock_w.run = _mock_run_fail
@@ -1399,54 +1374,50 @@ def _config_with_review(**agent_kwargs) -> WorkflowConfig:
 @pytest.mark.asyncio
 async def test_try_auto_merge_merges_when_checks_pass():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_checks = AsyncMock(return_value=[
+    scm = AsyncMock()
+    scm.fetch_pr_checks = AsyncMock(return_value=[
         {"status": "completed", "conclusion": "success"}
     ])
-    orch._github.merge_pr = AsyncMock()
+    orch = Orchestrator(_config_with_review(auto_merge=True), tracker, scm=scm)
 
     issue = _issue()
     await orch._try_auto_merge(issue, pr_number=42)
 
-    orch._github.merge_pr.assert_called_once_with(42)
+    scm.merge_pr.assert_called_once_with(42)
 
 
 @pytest.mark.asyncio
 async def test_try_auto_merge_skips_merge_when_checks_fail():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_checks = AsyncMock(return_value=[
+    scm = AsyncMock()
+    scm.fetch_pr_checks = AsyncMock(return_value=[
         {"status": "completed", "conclusion": "failure"}
     ])
-    orch._github.merge_pr = AsyncMock()
+    orch = Orchestrator(_config_with_review(auto_merge=True), tracker, scm=scm)
 
     issue = _issue()
     await orch._try_auto_merge(issue, pr_number=42)
 
-    orch._github.merge_pr.assert_not_called()
+    scm.merge_pr.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_try_auto_merge_merges_when_no_checks():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_checks = AsyncMock(return_value=[])
-    orch._github.merge_pr = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_checks = AsyncMock(return_value=[])
+    orch = Orchestrator(_config_with_review(auto_merge=True), tracker, scm=scm)
 
     issue = _issue()
     await orch._try_auto_merge(issue, pr_number=42)
 
-    orch._github.merge_pr.assert_called_once_with(42)
+    scm.merge_pr.assert_called_once_with(42)
 
 
 @pytest.mark.asyncio
 async def test_try_auto_merge_waits_for_in_progress_checks():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
     call_count = 0
 
     async def _checks(_pr_number):
@@ -1456,14 +1427,14 @@ async def test_try_auto_merge_waits_for_in_progress_checks():
             return [{"status": "in_progress", "conclusion": None}]
         return [{"status": "completed", "conclusion": "success"}]
 
-    orch._github.fetch_pr_checks = _checks
-    orch._github.merge_pr = AsyncMock()
+    scm.fetch_pr_checks = _checks
+    orch = Orchestrator(_config_with_review(auto_merge=True), tracker, scm=scm)
 
     issue = _issue()
     with patch("asyncio.sleep", AsyncMock()):
         await orch._try_auto_merge(issue, pr_number=42)
 
-    orch._github.merge_pr.assert_called_once_with(42)
+    scm.merge_pr.assert_called_once_with(42)
     assert call_count == 2
 
 
@@ -1475,13 +1446,10 @@ async def test_try_auto_merge_waits_for_in_progress_checks():
 async def test_run_reviewer_approve_adds_merge_label():
     from scale.agent.claude import TurnResult
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=True), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
-    orch._github.post_comment = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(auto_merge=True), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1494,21 +1462,18 @@ async def test_run_reviewer_approve_adds_merge_label():
         MockRW.return_value = mock_rw
         await orch._run_reviewer(issue)
 
-    orch._github.add_labels.assert_called_once_with(issue.number, ["scale:merge"])
-    orch._github.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
+    tracker.add_labels.assert_called_once_with(issue.number, ["scale:merge"])
+    tracker.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
 
 
 @pytest.mark.asyncio
 async def test_run_reviewer_request_changes_adds_needs_revision():
     from scale.agent.claude import TurnResult
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(auto_merge=False), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
-    orch._github.post_comment = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(auto_merge=False), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1522,8 +1487,8 @@ async def test_run_reviewer_request_changes_adds_needs_revision():
         MockRW.return_value = mock_rw
         await orch._run_reviewer(issue)
 
-    orch._github.add_labels.assert_called_once_with(issue.number, ["scale:needs-revision"])
-    orch._github.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
+    tracker.add_labels.assert_called_once_with(issue.number, ["scale:needs-revision"])
+    tracker.remove_label.assert_called_once_with(issue.number, "scale:pr-open")
 
 
 # ---------------------------------------------------------------------------
@@ -1562,10 +1527,9 @@ async def test_tick_dispatches_non_supervised_for_reviewer():
     normal_issue = _issue(id_="n1", number=6)
     normal_issue.labels = ["scale:pr-open"]
 
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[normal_issue])
-    orch._github.fetch_open_issues = AsyncMock(return_value=[])
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[normal_issue])
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     with patch.object(orch, "_run_reviewer", AsyncMock()) as mock_reviewer:
         await orch._tick()
@@ -1581,13 +1545,13 @@ async def test_tick_dispatches_non_supervised_for_reviewer():
 @pytest.mark.asyncio
 async def test_watch_merge_queue_tick_merges_issues_with_merge_label():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     merge_issue = _issue(id_="m1", number=9)
     merge_issue.labels = ["scale:pr-open", "scale:merge"]
 
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[merge_issue])
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[merge_issue])
 
     with patch.object(orch, "_merge_issue", AsyncMock()) as mock_merge:
         await orch._watch_merge_queue_tick()
@@ -1599,14 +1563,14 @@ async def test_watch_merge_queue_tick_merges_issues_with_merge_label():
 @pytest.mark.asyncio
 async def test_watch_merge_queue_tick_fetches_by_merge_label():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[])
+    scm = AsyncMock()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[])
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     with patch.object(orch, "_merge_issue", AsyncMock()):
         await orch._watch_merge_queue_tick()
 
-    orch._github.fetch_issues_by_label.assert_called_once_with("scale:merge")
+    tracker.fetch_issues_by_label.assert_called_once_with("scale:merge")
 
 
 @pytest.mark.asyncio
@@ -1645,37 +1609,31 @@ async def test_watch_merge_queue_tick_skips_when_no_review_config():
 @pytest.mark.asyncio
 async def test_merge_issue_merges_pr_and_applies_terminal_label():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
-    orch._github.merge_pr = AsyncMock()
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
     await orch._merge_issue(issue)
 
-    orch._github.merge_pr.assert_called_once_with(55)
-    orch._github.add_labels.assert_called_once_with(issue.number, ["scale:done"])
+    scm.merge_pr.assert_called_once_with(55)
+    tracker.add_labels.assert_called_once_with(issue.number, ["scale:done"])
     assert issue.id not in orch._state.claimed
 
 
 @pytest.mark.asyncio
 async def test_merge_issue_removes_pr_open_and_merge_labels():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
-    orch._github.merge_pr = AsyncMock()
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
     await orch._merge_issue(issue)
 
-    removed = [call.args[1] for call in orch._github.remove_label.call_args_list]
+    removed = [call.args[1] for call in tracker.remove_label.call_args_list]
     assert "scale:pr-open" in removed
     assert "scale:merge" in removed
 
@@ -1683,29 +1641,26 @@ async def test_merge_issue_removes_pr_open_and_merge_labels():
 @pytest.mark.asyncio
 async def test_merge_issue_skips_when_no_pr_found():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value=None)
-    orch._github.fetch_pr_for_issue = AsyncMock(return_value=None)
-    orch._github.merge_pr = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=None)
+    scm.fetch_pr_for_issue = AsyncMock(return_value=None)
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
     await orch._merge_issue(issue)
 
-    orch._github.merge_pr.assert_not_called()
+    scm.merge_pr.assert_not_called()
     assert issue.id not in orch._state.claimed
 
 
 @pytest.mark.asyncio
 async def test_merge_issue_releases_claim_on_error():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
-    orch._github.merge_pr = AsyncMock(side_effect=RuntimeError("merge conflict"))
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 55})
+    scm.merge_pr = AsyncMock(side_effect=RuntimeError("merge conflict"))
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1721,12 +1676,10 @@ async def test_merge_issue_releases_claim_on_error():
 @pytest.mark.asyncio
 async def test_run_reviewer_sets_secondary_during_run():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1749,12 +1702,10 @@ async def test_run_reviewer_sets_secondary_during_run():
 @pytest.mark.asyncio
 async def test_run_reviewer_clears_secondary_on_error():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
-    orch._github.add_labels = AsyncMock()
-    orch._github.remove_label = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1771,10 +1722,10 @@ async def test_run_reviewer_clears_secondary_on_error():
 @pytest.mark.asyncio
 async def test_run_feedback_worker_sets_secondary_during_run():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1797,10 +1748,10 @@ async def test_run_feedback_worker_sets_secondary_during_run():
 @pytest.mark.asyncio
 async def test_run_feedback_worker_clears_secondary_on_error():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_review(), tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
 
     issue = _issue()
     orch._state.claimed.add(issue.id)
@@ -1831,12 +1782,12 @@ def _config_with_rebase(**kwargs) -> WorkflowConfig:
 @pytest.mark.asyncio
 async def test_watch_conflict_queue_tick_claims_one_issue():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_rebase(), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker, scm=scm)
 
     issue1 = _issue(1, labels=["scale:conflict"])
     issue2 = _issue(2, labels=["scale:conflict"])
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue1, issue2])
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue1, issue2])
 
     with patch.object(orch, "_run_rebase_worker", AsyncMock()) as mock_run:
         await orch._watch_conflict_queue_tick()
@@ -1849,12 +1800,12 @@ async def test_watch_conflict_queue_tick_claims_one_issue():
 @pytest.mark.asyncio
 async def test_watch_conflict_queue_tick_skips_claimed():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_rebase(), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker, scm=scm)
 
     issue = _issue(1, labels=["scale:conflict"])
     orch._state.claimed.add(issue.id)
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
 
     with patch.object(orch, "_run_rebase_worker", AsyncMock()) as mock_run:
         await orch._watch_conflict_queue_tick()
@@ -1866,8 +1817,8 @@ async def test_watch_conflict_queue_tick_skips_claimed():
 @pytest.mark.asyncio
 async def test_run_rebase_worker_removes_conflict_label_on_success():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_rebase(), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker, scm=scm)
     issue = _issue(1, labels=["scale:conflict"])
 
     with patch("scale.orchestrator.core.RebaseWorker") as MockWorker:
@@ -1876,15 +1827,15 @@ async def test_run_rebase_worker_removes_conflict_label_on_success():
         MockWorker.return_value = mock_instance
         await orch._run_rebase_worker(issue)
 
-    orch._github.remove_label.assert_called_with(issue.number, "scale:conflict")
+    tracker.remove_label.assert_called_with(issue.number, "scale:conflict")
     assert issue.id not in orch._state.claimed
 
 
 @pytest.mark.asyncio
 async def test_run_rebase_worker_keeps_conflict_label_on_failure():
     tracker = AsyncMock()
-    orch = Orchestrator(_config_with_rebase(), tracker)
-    orch._github = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker, scm=scm)
     issue = _issue(1, labels=["scale:conflict"])
 
     with patch("scale.orchestrator.core.RebaseWorker") as MockWorker:
@@ -1893,7 +1844,7 @@ async def test_run_rebase_worker_keeps_conflict_label_on_failure():
         MockWorker.return_value = mock_instance
         await orch._run_rebase_worker(issue)
 
-    orch._github.remove_label.assert_not_called()
+    tracker.remove_label.assert_not_called()
     assert issue.id not in orch._state.claimed
 
 
@@ -1901,7 +1852,8 @@ async def test_run_rebase_worker_keeps_conflict_label_on_failure():
 async def test_run_adds_conflict_queue_task_when_rebase_configured():
     tracker = AsyncMock()
     tracker.fetch_terminal_issues = AsyncMock(return_value=[])
-    orch = Orchestrator(_config_with_rebase(), tracker)
+    scm = AsyncMock()
+    orch = Orchestrator(_config_with_rebase(), tracker, scm=scm)
 
     conflict_started = False
 
@@ -1922,3 +1874,66 @@ async def test_run_adds_conflict_queue_task_when_rebase_configured():
         await orch.run()
 
     assert conflict_started
+
+
+# ---------------------------------------------------------------------------
+# SCM abstraction — orchestrator uses _tracker and _scm exclusively
+# ---------------------------------------------------------------------------
+
+def test_orchestrator_has_no_github_attribute():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    assert not hasattr(orch, "_github"), "_github must not exist; use _tracker and _scm"
+
+
+def test_orchestrator_tracker_attribute_is_passed_instance():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    assert orch._tracker is tracker
+
+
+def test_orchestrator_scm_defaults_to_none():
+    tracker = AsyncMock()
+    orch = Orchestrator(_config(), tracker)
+    assert orch._scm is None
+
+
+def test_orchestrator_scm_set_when_passed():
+    tracker = AsyncMock()
+    scm = AsyncMock()
+    orch = Orchestrator(_config(), tracker, scm=scm)
+    assert orch._scm is scm
+
+
+def test_orchestrator_review_tasks_not_started_without_scm():
+    """run() must not schedule review/merge/feedback/rebase tasks when scm=None."""
+    import asyncio as _asyncio
+
+    config = WorkflowConfig(
+        tracker=TrackerConfig(kind="github", repo="o/r", api_token="tok"),
+        polling=PollingConfig(interval_ms=0),
+        prompt_template="Work on {{ issue.title }}.",
+        review=ReviewConfig(feedback_enabled=True),
+    )
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues = AsyncMock(return_value=[])
+    orch = Orchestrator(config, tracker)  # no scm
+
+    started: list[str] = []
+
+    async def _tick():
+        await _asyncio.sleep(0)
+
+    async def _merge():
+        started.append("merge")
+
+    async def _feedback():
+        started.append("feedback")
+
+    with patch.object(orch, "_tick_loop", side_effect=_tick), \
+         patch.object(orch, "_watch_merge_queue", side_effect=_merge), \
+         patch.object(orch, "_watch_pr_feedback", side_effect=_feedback):
+        _asyncio.get_event_loop().run_until_complete(orch.run())
+
+    assert "merge" not in started
+    assert "feedback" not in started

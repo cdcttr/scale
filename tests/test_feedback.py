@@ -214,33 +214,30 @@ async def test_feedback_worker_writes_log(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_initializes_watermark_on_first_encounter():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[_issue()])
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue()
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(return_value=[])
-
     await orch._watch_pr_feedback_tick()
 
     assert issue.number in orch._state.pr_comment_watermarks
-    orch._github.fetch_pr_comments.assert_not_called()
+    scm.fetch_pr_comments.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_dispatches_on_new_human_comments():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
-
     issue = _issue()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    scm.fetch_pr_comments = AsyncMock(return_value=[_human_comment()])
+    orch = Orchestrator(config, tracker, scm=scm)
+
     watermark = datetime(2026, 1, 1, tzinfo=timezone.utc)
     orch._state.pr_comment_watermarks[issue.number] = watermark
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(return_value=[_human_comment()])
 
     dispatched = []
 
@@ -257,15 +254,13 @@ async def test_watch_pr_feedback_dispatches_on_new_human_comments():
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_filters_scale_stats_comments():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
-
     issue = _issue()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    scm.fetch_pr_comments = AsyncMock(return_value=[_stats_comment()])
+    orch = Orchestrator(config, tracker, scm=scm)
     orch._state.pr_comment_watermarks[issue.number] = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(return_value=[_stats_comment()])
 
     dispatched = []
 
@@ -282,16 +277,14 @@ async def test_watch_pr_feedback_filters_scale_stats_comments():
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_skips_claimed_issues():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
-
     issue = _issue()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    scm.fetch_pr_comments = AsyncMock(return_value=[_human_comment()])
+    orch = Orchestrator(config, tracker, scm=scm)
     orch._state.claimed.add(issue.id)
     orch._state.pr_comment_watermarks[issue.number] = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(return_value=[_human_comment()])
 
     dispatched = []
 
@@ -308,15 +301,13 @@ async def test_watch_pr_feedback_skips_claimed_issues():
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_skips_when_no_new_comments():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
-
     issue = _issue()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    scm.fetch_pr_comments = AsyncMock(return_value=[])
+    orch = Orchestrator(config, tracker, scm=scm)
     orch._state.pr_comment_watermarks[issue.number] = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(return_value=[])
 
     dispatched = []
 
@@ -333,15 +324,13 @@ async def test_watch_pr_feedback_skips_when_no_new_comments():
 @pytest.mark.asyncio
 async def test_watch_pr_feedback_handles_comment_fetch_error():
     tracker = AsyncMock()
+    scm = AsyncMock()
     config = _config()
-    orch = Orchestrator(config, tracker)
-
     issue = _issue()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
+    scm.fetch_pr_comments = AsyncMock(side_effect=RuntimeError("network error"))
+    orch = Orchestrator(config, tracker, scm=scm)
     orch._state.pr_comment_watermarks[issue.number] = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label = AsyncMock(return_value=[issue])
-    orch._github.fetch_pr_comments = AsyncMock(side_effect=RuntimeError("network error"))
 
     await orch._watch_pr_feedback_tick()  # must not raise
 
@@ -353,14 +342,13 @@ async def test_watch_pr_feedback_handles_comment_fetch_error():
 @pytest.mark.asyncio
 async def test_run_feedback_worker_updates_watermark():
     tracker = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "https://example.com/pr/10"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff content")
     config = _config()
-    orch = Orchestrator(config, tracker)
+    orch = Orchestrator(config, tracker, scm=scm)
     issue = _issue()
     orch._state.claimed.add(issue.id)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "https://example.com/pr/10"})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff content")
 
     with patch.object(orch._workspace, "prepare", AsyncMock(return_value=MagicMock())), \
          patch("scale.orchestrator.core.FeedbackWorker") as MockFeedback:
@@ -376,14 +364,13 @@ async def test_run_feedback_worker_updates_watermark():
 @pytest.mark.asyncio
 async def test_run_feedback_worker_updates_watermark_on_failure():
     tracker = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "..."})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
     config = _config()
-    orch = Orchestrator(config, tracker)
+    orch = Orchestrator(config, tracker, scm=scm)
     issue = _issue()
     orch._state.claimed.add(issue.id)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "..."})
-    orch._github.fetch_pr_diff = AsyncMock(return_value="diff")
 
     with patch("scale.orchestrator.core.FeedbackWorker") as MockFeedback:
         mock_worker = MagicMock()
@@ -398,13 +385,12 @@ async def test_run_feedback_worker_updates_watermark_on_failure():
 @pytest.mark.asyncio
 async def test_run_feedback_worker_skips_when_no_pr():
     tracker = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=None)
     config = _config()
-    orch = Orchestrator(config, tracker)
+    orch = Orchestrator(config, tracker, scm=scm)
     issue = _issue()
     orch._state.claimed.add(issue.id)
-
-    orch._github = AsyncMock()
-    orch._github.fetch_pr_for_branch = AsyncMock(return_value=None)
 
     with patch("scale.orchestrator.core.FeedbackWorker") as MockFeedback:
         await orch._run_feedback_worker(issue, [_human_comment()])
@@ -421,8 +407,9 @@ async def test_run_feedback_worker_skips_when_no_pr():
 async def test_run_starts_feedback_loop_when_enabled():
     tracker = AsyncMock()
     tracker.fetch_terminal_issues = AsyncMock(return_value=[])
+    scm = AsyncMock()
     config = _config(feedback_enabled=True)
-    orch = Orchestrator(config, tracker)
+    orch = Orchestrator(config, tracker, scm=scm)
 
     feedback_started = False
 

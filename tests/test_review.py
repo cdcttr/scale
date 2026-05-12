@@ -265,7 +265,8 @@ async def test_run_worker_adds_pr_open_label_when_review_configured():
     tracker.fetch_issues_by_numbers.return_value = []
 
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    scm = AsyncMock()
+    orch = Orchestrator(config, tracker, scm=scm)
 
     added_labels: list[tuple] = []
 
@@ -280,8 +281,9 @@ async def test_run_worker_adds_pr_open_label_when_review_configured():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
+    tracker.add_labels = AsyncMock(side_effect=_mock_add_labels)
+
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", side_effect=_mock_add_labels), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -315,8 +317,9 @@ async def test_run_worker_adds_terminal_label_when_no_review():
     orch._state.running[issue.id] = LiveSession(issue=issue, task=task)
     orch._state.claimed.add(issue.id)
 
+    tracker.add_labels = AsyncMock(side_effect=_mock_add_labels)
+
     with patch("scale.orchestrator.core.LocalWorker") as MockWorker, \
-         patch.object(orch._github, "add_labels", side_effect=_mock_add_labels), \
          patch.object(orch._workspace, "remove", AsyncMock()):
         mock_w = MagicMock()
         mock_w.run = _mock_run
@@ -337,10 +340,9 @@ async def test_tick_dispatches_pr_open_issues_to_reviewer():
     pr_open_issue = _issue(number=5, labels=["scale:pr-open"])
 
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label.return_value = [pr_open_issue]
-    orch._github.fetch_candidate_issues = AsyncMock(return_value=[])
+    scm = AsyncMock()
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[pr_open_issue])
+    orch = Orchestrator(config, tracker, scm=scm)
 
     with patch.object(orch, "_run_reviewer", AsyncMock()) as mock_reviewer:
         await orch._tick()
@@ -394,21 +396,23 @@ async def test_tick_does_not_redispatch_claimed_pr_open_issues():
 async def test_run_reviewer_approve_adds_merge_label_and_comment():
     tracker = AsyncMock()
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=pr_data)
+    scm.fetch_pr_diff = AsyncMock(return_value="diff text")
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue(number=3, labels=["scale:pr-open"])
-    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
     add_calls: list[tuple] = []
     remove_calls: list[tuple] = []
     comment_calls: list[tuple] = []
 
-    with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
-         patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
-         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
-         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
-         patch.object(orch._github, "post_comment", AsyncMock(side_effect=lambda n, b: comment_calls.append((n, b)))), \
-         patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
+    tracker.add_labels = AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))
+    tracker.remove_label = AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))
+    tracker.post_comment = AsyncMock(side_effect=lambda n, b: comment_calls.append((n, b)))
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
         mock_rw = MagicMock()
         mock_rw.run = AsyncMock(return_value=TurnResult(
             success=True, usage=None, message="Looks good.\nVERDICT: APPROVE"
@@ -427,20 +431,21 @@ async def test_run_reviewer_approve_adds_merge_label_and_comment():
 async def test_run_reviewer_exception_removes_pr_open_and_releases_claim():
     tracker = AsyncMock()
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=pr_data)
+    scm.fetch_pr_diff = AsyncMock(return_value="diff text")
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue(number=3, labels=["scale:pr-open"])
-    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
     add_calls: list[tuple] = []
     remove_calls: list[tuple] = []
 
-    with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
-         patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
-         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
-         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
-         patch.object(orch._github, "post_comment", AsyncMock()), \
-         patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
+    tracker.add_labels = AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))
+    tracker.remove_label = AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
         mock_rw = MagicMock()
         mock_rw.run = AsyncMock(side_effect=RuntimeError("agent crashed"))
         MockReviewer.return_value = mock_rw
@@ -457,17 +462,18 @@ async def test_run_reviewer_exception_removes_pr_open_and_releases_claim():
 async def test_run_reviewer_no_pr_skips_review():
     tracker = AsyncMock()
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=None)
+    scm.fetch_pr_for_issue = AsyncMock(return_value=None)
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue(number=3, labels=["scale:pr-open"])
 
     add_calls: list[tuple] = []
+    tracker.add_labels = AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))
 
-    with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=None)), \
-         patch.object(orch._github, "fetch_pr_for_issue", AsyncMock(return_value=None)), \
-         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))):
-        orch._state.claimed.add(issue.id)
-        await orch._run_reviewer(issue)
+    orch._state.claimed.add(issue.id)
+    await orch._run_reviewer(issue)
 
     assert not any("scale:done" in labels for _, labels in add_calls)
     assert not any("scale:conflict" in labels for _, labels in add_calls)
@@ -596,21 +602,21 @@ def test_review_config_no_verdict_label_default():
 async def test_run_reviewer_no_verdict_applies_needs_approval_and_removes_pr_open():
     tracker = AsyncMock()
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value=pr_data)
+    scm.fetch_pr_diff = AsyncMock(return_value="diff text")
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue(number=3, labels=["scale:pr-open"])
-    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
 
     add_calls: list[tuple] = []
     remove_calls: list[tuple] = []
-    comment_calls: list[tuple] = []
 
-    with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
-         patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
-         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
-         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
-         patch.object(orch._github, "post_comment", AsyncMock(side_effect=lambda n, b: comment_calls.append((n, b)))), \
-         patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
+    tracker.add_labels = AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))
+    tracker.remove_label = AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
         mock_rw = MagicMock()
         mock_rw.run = AsyncMock(return_value=TurnResult(
             success=True, usage=None, message="I cannot determine a verdict here."
@@ -632,20 +638,17 @@ async def test_run_reviewer_no_verdict_releases_claim_so_no_redispatch():
     tracker.fetch_issues_by_numbers.return_value = []
 
     config = _config_with_review()
-    orch = Orchestrator(config, tracker)
+    scm = AsyncMock()
+    orch = Orchestrator(config, tracker, scm=scm)
 
     issue = _issue(number=5, labels=["scale:pr-open"])
-    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+    tracker.fetch_issues_by_label = AsyncMock(return_value=[issue])
 
     reviewer_call_count = 0
 
     async def _counting_reviewer(iss: object) -> None:
         nonlocal reviewer_call_count
         reviewer_call_count += 1
-
-    orch._github = AsyncMock()
-    orch._github.fetch_issues_by_label.return_value = [issue]
-    orch._github.fetch_candidate_issues = AsyncMock(return_value=[])
 
     with patch.object(orch, "_run_reviewer", side_effect=_counting_reviewer):
         await orch._tick()

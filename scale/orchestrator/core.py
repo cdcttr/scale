@@ -11,8 +11,8 @@ from scale.orchestrator.dispatch import is_eligible, sort_issues, retry_delay_ms
 from scale.orchestrator.state import (
     CompletedSession, LiveSession, OrchestratorState, RetryEntry, SecondarySession, TokenTotals,
 )
+from scale.scm.base import SCMClient
 from scale.tracker.base import TrackerClient
-from scale.tracker.github import GitHubClient
 from scale.tracker.models import Issue
 from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
@@ -27,21 +27,21 @@ logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
-    def __init__(self, config: WorkflowConfig, tracker: TrackerClient) -> None:
+    def __init__(self, config: WorkflowConfig, tracker: TrackerClient, scm: Optional[SCMClient] = None) -> None:
         self._config = config
         self._tracker = tracker
+        self._scm = scm
         self._state = OrchestratorState()
         self._lock = asyncio.Lock()
         self._workspace = WorkspaceManager(config)
         self._refresh_event = asyncio.Event()
         self._ssh_index = 0
-        self._github = GitHubClient(config.tracker)
         self._planner_runner = None
         if config.planner:
-            self._planner_runner = PlannerRunner(config.planner, config.codex, self._github)
+            self._planner_runner = PlannerRunner(config.planner, config.codex, self._tracker)
         self._triage_runner = None
         if config.triage:
-            self._triage_runner = TriageRunner(config.triage, config.codex, self._github)
+            self._triage_runner = TriageRunner(config.triage, config.codex, self._tracker)
 
     def _has_slot(self, issue: Issue) -> bool:
         """Check concurrency limits only — not claimed/running status."""
@@ -72,23 +72,21 @@ class Orchestrator:
         self._refresh_event.set()
 
     async def _gh_add_labels(self, number: int, labels: list[str]) -> None:
-        if self._github:
-            await self._github.add_labels(number, labels)
+        await self._tracker.add_labels(number, labels)
 
     async def _gh_remove_label(self, number: int, label: str) -> None:
-        if self._github:
-            await self._github.remove_label(number, label)
+        await self._tracker.remove_label(number, label)
 
     async def run(self) -> None:
         await self._startup_cleanup()
         tasks = [asyncio.create_task(self._tick_loop())]
         if self._config.planner:
             tasks.append(asyncio.create_task(self._watch_planned()))
-        if self._config.review:
+        if self._config.review and self._scm is not None:
             tasks.append(asyncio.create_task(self._watch_merge_queue()))
-        if self._config.review and self._config.review.feedback_enabled:
+        if self._config.review and self._scm is not None and self._config.review.feedback_enabled:
             tasks.append(asyncio.create_task(self._watch_pr_feedback()))
-        if self._config.rebase:
+        if self._config.rebase and self._scm is not None:
             tasks.append(asyncio.create_task(self._watch_conflict_queue()))
         await asyncio.gather(*tasks)
 
@@ -144,7 +142,7 @@ class Orchestrator:
                     *self._config.tracker.skip_labels,
                     *self._config.tracker.terminal_labels,
                 }
-                all_open = await self._github.fetch_open_issues()
+                all_open = await self._tracker.fetch_open_issues()
                 async with self._lock:
                     for issue in all_open:
                         if issue.id in self._state.claimed:
@@ -169,9 +167,9 @@ class Orchestrator:
                             asyncio.create_task(self._run_planner(issue))
             except Exception as e:
                 logger.warning("Plan issue fetch failed: %s", e)
-        if self._config.review:
+        if self._config.review and self._scm is not None:
             try:
-                pr_open_issues = await self._github.fetch_issues_by_label(
+                pr_open_issues = await self._tracker.fetch_issues_by_label(
                     self._config.review.pr_open_label
                 )
                 async with self._lock:
@@ -393,7 +391,7 @@ class Orchestrator:
 
         comment = "\n".join(lines)
         try:
-            await self._github.post_comment(issue.number, comment)
+            await self._tracker.post_comment(issue.number, comment)
         except Exception as exc:
             logger.warning(
                 "Failed to post attempt summary for issue #%d: %s", issue.number, exc
@@ -401,7 +399,7 @@ class Orchestrator:
 
     async def _fetch_previous_attempt_summary(self, issue: Issue) -> Optional[str]:
         try:
-            comments = await self._github.fetch_issue_comments(issue.number)
+            comments = await self._tracker.fetch_issue_comments(issue.number)
             for comment in reversed(comments):
                 if "<!-- scale-attempt-summary -->" in comment.get("body", ""):
                     return comment["body"]
@@ -456,16 +454,16 @@ class Orchestrator:
             if session:
                 await self._record_stats(issue, session, success=True, attempt=attempt)
             is_supervised = self._config.agent.supervised_label in (issue.labels or [])
-            if self._config.review:
-                await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
-            elif self._config.agent.auto_merge and not is_supervised:
-                pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            if self._config.review and self._scm is not None:
+                await self._tracker.add_labels(issue.number, [self._config.review.pr_open_label])
+            elif self._config.agent.auto_merge and not is_supervised and self._scm is not None:
+                pr = await self._scm.fetch_pr_for_branch(issue.branch_name)
                 if pr is not None:
                     await self._try_auto_merge(issue, pr["number"])
                 if self._config.tracker.terminal_labels:
-                    await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
+                    await self._tracker.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             elif self._config.tracker.terminal_labels:
-                await self._github.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
+                await self._tracker.add_labels(issue.number, [self._config.tracker.terminal_labels[0]])
             asyncio.create_task(self._workspace.remove(issue))
         except asyncio.CancelledError:
             async with self._lock:
@@ -535,7 +533,7 @@ class Orchestrator:
         )
 
         try:
-            await self._github.post_comment(issue.number, comment)
+            await self._tracker.post_comment(issue.number, comment)
         except Exception as exc:
             logger.warning("Failed to post stats comment for issue #%d: %s", issue.number, exc)
 
@@ -566,19 +564,20 @@ class Orchestrator:
 
     async def _run_reviewer(self, issue: Issue) -> None:
         assert self._config.review is not None
+        assert self._scm is not None
         review = self._config.review
         async with self._lock:
             self._state.secondary[issue.id] = SecondarySession(issue=issue, kind="review")
         try:
-            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            pr = await self._scm.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
-                pr = await self._github.fetch_pr_for_issue(issue.number)
+                pr = await self._scm.fetch_pr_for_issue(issue.number)
             if pr is None:
                 logger.warning("No open PR found for issue #%d, skipping review", issue.number)
                 return
             pr_number: int = pr["number"]
             pr_url: str = pr["html_url"]
-            pr_diff = await self._github.fetch_pr_diff(pr_number)
+            pr_diff = await self._scm.fetch_pr_diff(pr_number)
             worker = ReviewWorker(self._config)
             result = await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
 
@@ -587,19 +586,19 @@ class Orchestrator:
                 "",
             )
             if verdict_line.startswith("VERDICT: APPROVE"):
-                await self._github.post_comment(
+                await self._tracker.post_comment(
                     issue.number, f"**Review:** Approved.\n\n{result.message}"
                 )
-                await self._github.add_labels(issue.number, [review.merge_label])
-                await self._github.remove_label(issue.number, review.pr_open_label)
+                await self._tracker.add_labels(issue.number, [review.merge_label])
+                await self._tracker.remove_label(issue.number, review.pr_open_label)
                 logger.info("Reviewer approved PR #%d for issue #%d", pr_number, issue.number)
             elif verdict_line.startswith("VERDICT: REQUEST_CHANGES:"):
                 reason = verdict_line[len("VERDICT: REQUEST_CHANGES:"):].strip()
-                await self._github.post_comment(
+                await self._tracker.post_comment(
                     issue.number, f"**Review:** Changes requested — {reason}\n\n{result.message}"
                 )
-                await self._github.add_labels(issue.number, [review.needs_revision_label])
-                await self._github.remove_label(issue.number, review.pr_open_label)
+                await self._tracker.add_labels(issue.number, [review.needs_revision_label])
+                await self._tracker.remove_label(issue.number, review.pr_open_label)
                 logger.info(
                     "Reviewer requested changes on PR #%d for issue #%d: %s",
                     pr_number, issue.number, reason,
@@ -609,11 +608,11 @@ class Orchestrator:
                     "Reviewer returned no valid verdict for issue #%d, applying %s",
                     issue.number, review.no_verdict_label,
                 )
-                await self._github.add_labels(issue.number, [review.no_verdict_label])
-                await self._github.remove_label(issue.number, review.pr_open_label)
+                await self._tracker.add_labels(issue.number, [review.no_verdict_label])
+                await self._tracker.remove_label(issue.number, review.pr_open_label)
         except Exception as e:
             logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
-            await self._github.remove_label(issue.number, review.pr_open_label)
+            await self._tracker.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
                 self._state.secondary.pop(issue.id, None)
@@ -637,9 +636,10 @@ class Orchestrator:
 
     async def _watch_pr_feedback_tick(self) -> None:
         assert self._config.review is not None
+        assert self._scm is not None
         review = self._config.review
 
-        pr_open_issues = await self._github.fetch_issues_by_label(review.pr_open_label)
+        pr_open_issues = await self._tracker.fetch_issues_by_label(review.pr_open_label)
 
         for issue in pr_open_issues:
             async with self._lock:
@@ -652,7 +652,7 @@ class Orchestrator:
 
             watermark = self._state.pr_comment_watermarks[issue.number]
             try:
-                comments = await self._github.fetch_pr_comments(issue.number, since=watermark)
+                comments = await self._scm.fetch_pr_comments(issue.number, since=watermark)
             except Exception as e:
                 logger.warning("Failed to fetch PR comments for issue #%d: %s", issue.number, e)
                 continue
@@ -670,14 +670,15 @@ class Orchestrator:
             asyncio.create_task(self._run_feedback_worker(issue, human_comments))
 
     async def _run_feedback_worker(self, issue: Issue, comments: list[dict]) -> None:
+        assert self._scm is not None
         async with self._lock:
             self._state.secondary[issue.id] = SecondarySession(issue=issue, kind="feedback")
         try:
-            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            pr = await self._scm.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
                 logger.warning("No open PR found for issue #%d, skipping feedback", issue.number)
                 return
-            pr_diff = await self._github.fetch_pr_diff(pr["number"])
+            pr_diff = await self._scm.fetch_pr_diff(pr["number"])
             worker = FeedbackWorker(self._workspace, self._config)
             await worker.run(issue, pr_diff=pr_diff, pr_comments=comments)
             logger.info("Feedback worker completed for issue #%d", issue.number)
@@ -690,10 +691,11 @@ class Orchestrator:
             self._state.claimed.discard(issue.id)
 
     async def _try_auto_merge(self, issue: Issue, pr_number: int) -> None:
+        assert self._scm is not None
         for _ in range(10):
-            checks = await self._github.fetch_pr_checks(pr_number)
+            checks = await self._scm.fetch_pr_checks(pr_number)
             if not checks:
-                await self._github.merge_pr(pr_number)
+                await self._scm.merge_pr(pr_number)
                 return
             all_done = all(c.get("status") == "completed" for c in checks)
             if all_done:
@@ -702,7 +704,7 @@ class Orchestrator:
                     for c in checks
                 )
                 if all_pass:
-                    await self._github.merge_pr(pr_number)
+                    await self._scm.merge_pr(pr_number)
                 else:
                     logger.warning(
                         "CI checks failed for PR #%d on issue #%d, leaving PR open",
@@ -724,10 +726,10 @@ class Orchestrator:
             await asyncio.sleep(self._config.polling.interval_ms / 1000)
 
     async def _watch_merge_queue_tick(self) -> None:
-        if not self._config.review:
+        if not self._config.review or self._scm is None:
             return
         review = self._config.review
-        merge_issues = await self._github.fetch_issues_by_label(review.merge_label)
+        merge_issues = await self._tracker.fetch_issues_by_label(review.merge_label)
         async with self._lock:
             candidates = []
             for issue in merge_issues:
@@ -740,21 +742,22 @@ class Orchestrator:
 
     async def _merge_issue(self, issue: Issue) -> None:
         assert self._config.review is not None
+        assert self._scm is not None
         review = self._config.review
         try:
-            pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+            pr = await self._scm.fetch_pr_for_branch(issue.branch_name)
             if pr is None:
-                pr = await self._github.fetch_pr_for_issue(issue.number)
+                pr = await self._scm.fetch_pr_for_issue(issue.number)
             if pr is None:
                 logger.warning("No open PR for issue #%d, skipping merge", issue.number)
                 return
-            await self._github.merge_pr(pr["number"])
+            await self._scm.merge_pr(pr["number"])
             if self._config.tracker.terminal_labels:
-                await self._github.add_labels(
+                await self._tracker.add_labels(
                     issue.number, [self._config.tracker.terminal_labels[0]]
                 )
-            await self._github.remove_label(issue.number, review.pr_open_label)
-            await self._github.remove_label(issue.number, review.merge_label)
+            await self._tracker.remove_label(issue.number, review.pr_open_label)
+            await self._tracker.remove_label(issue.number, review.merge_label)
         except Exception as e:
             logger.error("Merge failed for issue #%d: %s", issue.number, e)
         finally:
@@ -770,10 +773,10 @@ class Orchestrator:
             await asyncio.sleep(self._config.polling.interval_ms / 1000)
 
     async def _watch_conflict_queue_tick(self) -> None:
-        if not self._config.rebase:
+        if not self._config.rebase or self._scm is None:
             return
         rebase_cfg = self._config.rebase
-        conflict_issues = await self._github.fetch_issues_by_label(rebase_cfg.conflict_label)
+        conflict_issues = await self._tracker.fetch_issues_by_label(rebase_cfg.conflict_label)
         async with self._lock:
             candidate = None
             for issue in conflict_issues:
@@ -786,9 +789,10 @@ class Orchestrator:
 
     async def _run_rebase_worker(self, issue: Issue) -> None:
         assert self._config.rebase is not None
+        assert self._scm is not None
         rebase_cfg = self._config.rebase
         try:
-            worker = RebaseWorker(self._workspace, self._github, self._config)
+            worker = RebaseWorker(self._workspace, self._scm, self._config)
 
             def _on_event(event: dict) -> None:
                 session = self._state.running.get(issue.id)
@@ -798,9 +802,9 @@ class Orchestrator:
             success = await worker.run(issue, on_event=_on_event)
 
             if success:
-                await self._github.remove_label(issue.number, rebase_cfg.conflict_label)
-                if self._config.review:
-                    await self._github.add_labels(issue.number, [self._config.review.pr_open_label])
+                await self._tracker.remove_label(issue.number, rebase_cfg.conflict_label)
+                if self._config.review and self._scm is not None:
+                    await self._tracker.add_labels(issue.number, [self._config.review.pr_open_label])
                 logger.info("Rebase succeeded for issue #%d, re-queued for review", issue.number)
             else:
                 logger.warning("Rebase failed for issue #%d, will retry next poll", issue.number)

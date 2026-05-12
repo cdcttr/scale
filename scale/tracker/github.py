@@ -10,6 +10,7 @@ import httpx
 from scale.tracker.base import TrackerClient
 from scale.tracker.models import Issue
 from scale.config.schema import TrackerConfig
+from scale.scm.base import SCMClient
 
 _PRIORITY_RE = re.compile(r'^priority:(\d+)$')
 _SLUG_RE = re.compile(r'[^a-z0-9]+')
@@ -27,7 +28,7 @@ def _parse_priority(labels: list[str]) -> Optional[int]:
     return None
 
 
-class GitHubClient(TrackerClient):
+class GitHubClient(TrackerClient, SCMClient):
     def __init__(self, config: TrackerConfig) -> None:
         self._config = config
         owner, repo = config.repo.split('/', 1)
