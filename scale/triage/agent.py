@@ -44,8 +44,20 @@ Respond with a JSON object only — no prose outside the JSON:
   "needs_approval": false,
   "summary": "One-sentence verdict",
   "reasons": ["Only populated if not ready or needs_approval — specific reasons"],
+  "solutions": [
+    {
+      "name": "Option A — <short name>",
+      "trade_offs": "<pros and cons in one line>",
+      "recommended": true
+    }
+  ],
   "comment": "Full markdown comment body to post on GitHub"
 }
+
+The solutions field is ONLY populated when needs_approval=true. It must enumerate the plausible
+implementation approaches with their trade-offs. At least two options should be listed.
+Set recommended=true on the option you would choose if forced to pick one; set it false on others.
+For ready or not-ready verdicts, set solutions to [].
 
 Set ready=true and needs_approval=false for ready issues.
 Set ready=false and needs_approval=true for issues that need human approval.
@@ -70,6 +82,13 @@ This issue is well-specified but requires human review before autonomous dispatc
 - <specific reason>
 - <specific reason>
 
+## Solutions
+
+**<Option A name>** — <trade-offs>
+**<Option B name>** — <trade-offs>
+
+**Recommendation:** <name of recommended option>
+
 A human should review and either approve dispatch or request more detail.
 
 Not ready:
@@ -93,6 +112,7 @@ class TriageAssessment:
     reasons: list[str] = field(default_factory=list)
     comment: str = ""
     needs_approval: bool = False
+    solutions: list[dict] = field(default_factory=list)
 
 
 class TriageAgent:
@@ -158,6 +178,7 @@ class TriageAgent:
                 reasons=data.get("reasons", []),
                 comment=data.get("comment", ""),
                 needs_approval=bool(data.get("needs_approval", False)),
+                solutions=data.get("solutions", []),
             )
         except Exception as exc:
             log.error(

@@ -159,3 +159,52 @@ async def test_assess_needs_approval_false_by_default(tmp_path: Path):
 def test_system_prompt_mentions_needs_approval():
     from scale.triage.agent import _SYSTEM_PROMPT
     assert "needs_approval" in _SYSTEM_PROMPT or "needs-approval" in _SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_assess_needs_approval_parses_solutions(tmp_path: Path):
+    payload = json.dumps({
+        "ready": False,
+        "needs_approval": True,
+        "summary": "Multiple valid approaches exist.",
+        "reasons": ["Multiple valid implementation approaches"],
+        "solutions": [
+            {"name": "Option A — mock the writer", "trade_offs": "low risk, isolated", "recommended": True},
+            {"name": "Option B — configurable path", "trade_offs": "more flexible, touches more code", "recommended": False},
+        ],
+        "comment": "## Symphony Triage\n\n**Status: Needs Approval ⚠️**\n\n## Solutions\n\n**Option A**",
+    })
+    agent = TriageAgent(_config(), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn_result(payload))):
+        result = await agent.assess(_issue(), [], tmp_path)
+    assert result is not None
+    assert result.needs_approval is True
+    assert len(result.solutions) == 2
+    assert result.solutions[0]["name"] == "Option A — mock the writer"
+    assert result.solutions[0]["recommended"] is True
+    assert result.solutions[1]["recommended"] is False
+
+
+@pytest.mark.asyncio
+async def test_assess_solutions_defaults_to_empty(tmp_path: Path):
+    payload = json.dumps({
+        "ready": True,
+        "summary": "Clear and actionable.",
+        "reasons": [],
+        "comment": "## Symphony Triage\n\n**Status: Ready ✅**\n\nClear.",
+    })
+    agent = TriageAgent(_config(), _codex())
+    with patch.object(agent._runner, "run_turn", AsyncMock(return_value=_turn_result(payload))):
+        result = await agent.assess(_issue(), [], tmp_path)
+    assert result is not None
+    assert result.solutions == []
+
+
+def test_system_prompt_includes_solutions_for_needs_approval():
+    from scale.triage.agent import _SYSTEM_PROMPT
+    assert "solutions" in _SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_needs_approval_comment_has_solutions_section():
+    from scale.triage.agent import _SYSTEM_PROMPT
+    assert "## Solutions" in _SYSTEM_PROMPT
