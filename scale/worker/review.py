@@ -24,6 +24,7 @@ class ReviewWorker:
         pr_url: str,
         pr_diff: str,
         on_event: Optional[Callable[[dict], None]] = None,
+        log_path: Optional[Path] = None,
     ) -> "TurnResult":
         assert self._config.review is not None
         review = self._config.review
@@ -43,6 +44,8 @@ class ReviewWorker:
                 is_continuation=False,
                 on_event=on_event,
                 model=review.model,
+                log_path=log_path,
+                log_label="Review",
             )
 
         if not result.success:

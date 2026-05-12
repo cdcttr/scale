@@ -193,18 +193,24 @@ async def test_feedback_worker_runs_after_hook_on_failure(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_feedback_worker_writes_log(tmp_path: Path):
+async def test_feedback_worker_passes_log_path_to_runner(tmp_path: Path):
     config = _config()
     ws = _mock_workspace(tmp_path)
     worker = FeedbackWorker(ws, config)
-    worker._runner.run_turn = AsyncMock(return_value=TurnResult(success=True, usage=TokenUsage(5, 3)))
+
+    captured: list[dict] = []
+
+    async def _capture(workspace, prompt, is_continuation, **kwargs):
+        captured.append(kwargs)
+        return TurnResult(success=True, usage=TokenUsage(5, 3))
+
+    worker._runner.run_turn = _capture
 
     await worker.run(_issue(), pr_diff="diff content", pr_comments=[_human_comment("please fix")])
 
-    log = (tmp_path / "agent.log").read_text()
-    assert "Feedback Turn" in log
-    assert "PROMPT:" in log
-    assert "RESULT: success=True" in log
+    assert len(captured) == 1
+    assert captured[0]["log_path"] == tmp_path / "agent.log"
+    assert captured[0]["log_label"] == "Feedback Turn"
 
 
 # ---------------------------------------------------------------------------

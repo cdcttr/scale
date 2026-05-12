@@ -1,7 +1,5 @@
 from __future__ import annotations
-import json
 import logging
-from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from scale.agent.claude import ClaudeRunner
@@ -47,14 +45,6 @@ class RebaseWorker:
         pr_diff = await self._scm.fetch_pr_diff(pr["number"])
         conflict_context = await self._scm.fetch_conflict_context(issue.branch_name)
 
-        log_path = workspace_path / "rebase.log"
-
-        def _log_event(event: dict) -> None:
-            with open(log_path, "a") as f:
-                f.write(json.dumps(event) + "\n")
-            if on_event:
-                on_event(event)
-
         prompt = render_rebase_prompt(
             rebase_cfg.template,
             issue,
@@ -64,22 +54,16 @@ class RebaseWorker:
             conflict_context=conflict_context,
         )
 
-        with open(log_path, "a") as f:
-            f.write(f"\n{'=' * 60}\n")
-            f.write(f"Rebase Turn — {datetime.now(timezone.utc).isoformat()}\n")
-            f.write(f"{'=' * 60}\n\nPROMPT:\n{prompt}\n\nEVENTS:\n")
-
         try:
             result = await self._runner.run_turn(
                 workspace=workspace_path,
                 prompt=prompt,
                 is_continuation=False,
-                on_event=_log_event,
+                on_event=on_event,
                 model=rebase_cfg.model,
+                log_path=workspace_path / "rebase.log",
+                log_label="Rebase Turn",
             )
-
-            with open(log_path, "a") as f:
-                f.write(f"\nRESULT: success={result.success}\n")
 
             if not result.success:
                 logger.warning(

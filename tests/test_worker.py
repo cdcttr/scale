@@ -119,22 +119,24 @@ async def test_local_worker_after_hook_runs_on_failure(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_local_worker_writes_agent_log(tmp_path: Path):
+async def test_local_worker_passes_log_path_to_runner(tmp_path: Path):
     config = _config()
     ws = _mock_workspace(tmp_path)
     worker = LocalWorker(ws, config)
-    worker._runner.run_turn = AsyncMock(
-        return_value=TurnResult(success=True, usage=TokenUsage(10, 5), stderr="some warning")
-    )
+
+    captured: list[dict] = []
+
+    async def _capture(workspace, prompt, is_continuation, **kwargs):
+        captured.append(kwargs)
+        return TurnResult(success=True, usage=TokenUsage(10, 5))
+
+    worker._runner.run_turn = _capture
 
     await worker.run(_issue(), config, attempt=None)
 
-    log = (tmp_path / "agent.log").read_text()
-    assert "PROMPT:" in log
-    assert "Fix it" in log  # rendered from template
-    assert "RESULT: success=True" in log
-    assert "STDERR:" in log
-    assert "some warning" in log
+    assert len(captured) == 1
+    assert captured[0]["log_path"] == tmp_path / "agent.log"
+    assert "Turn 1" in captured[0]["log_label"]
 
 
 @pytest.mark.asyncio
@@ -145,7 +147,7 @@ async def test_local_worker_first_turn_uses_rendered_prompt(tmp_path: Path):
 
     prompts_used: list[tuple[str, bool]] = []
 
-    async def _capture_turn(workspace, prompt, is_continuation, on_event=None):
+    async def _capture_turn(workspace, prompt, is_continuation, on_event=None, **kwargs):
         prompts_used.append((prompt, is_continuation))
         return TurnResult(success=True, usage=TokenUsage(1, 1))
 

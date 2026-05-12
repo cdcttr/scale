@@ -6,6 +6,7 @@ import os
 import signal
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -90,7 +91,34 @@ class ClaudeRunner:
         is_continuation: bool,
         on_event: Optional[Callable[[dict], None]] = None,
         model: Optional[str] = None,
+        log_path: Optional[Path] = None,
+        log_label: str = "Turn",
     ) -> TurnResult:
+        if log_path is not None:
+            with open(log_path, "a") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"{log_label} — {datetime.now(timezone.utc).isoformat()}\n")
+                f.write(f"{'=' * 60}\n\nPROMPT:\n{prompt}\n\nEVENTS:\n")
+
+        def _dispatch(event: dict) -> None:
+            if log_path is not None:
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(event) + "\n")
+            if on_event:
+                on_event(event)
+
+        def _log_result(r: TurnResult) -> TurnResult:
+            if log_path is not None:
+                with open(log_path, "a") as f:
+                    f.write(f"\nRESULT: success={r.success}\n")
+                    if r.message:
+                        f.write(f"MESSAGE: {r.message}\n")
+                    if r.stderr:
+                        f.write(f"STDERR:\n{r.stderr}\n")
+                    if r.usage:
+                        f.write(f"TOKENS: in={r.usage.input_tokens} out={r.usage.output_tokens}\n")
+            return r
+
         cmd = self._build_cmd(prompt, is_continuation, model)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -123,8 +151,7 @@ class ClaudeRunner:
                     now = time.monotonic()
                     elapsed_s = now - last_activity
 
-                    if on_event:
-                        on_event({"type": "scale:heartbeat", "elapsed_s": round(elapsed_s)})
+                    _dispatch({"type": "scale:heartbeat", "elapsed_s": round(elapsed_s)})
 
                     if stall_detected_at is not None:
                         if (now - stall_detected_at) >= grace_period_s:
@@ -134,12 +161,12 @@ class ClaudeRunner:
                                 "stall grace period exceeded in %s after %.0fs",
                                 workspace, now - stall_detected_at,
                             )
-                            return TurnResult(
+                            return _log_result(TurnResult(
                                 success=False,
                                 usage=None,
                                 message=f"Stall grace period exceeded after {now - stall_detected_at:.0f}s",
                                 stall_info=stall_workspace_state,
-                            )
+                            ))
                     elif elapsed_s >= stall_timeout_s:
                         ws_state = await gather_workspace_state(workspace, since_sha=start_sha)
                         stall_workspace_state = ws_state
@@ -151,8 +178,7 @@ class ClaudeRunner:
                             "status_summary": ws_state.status_summary,
                             "grace_period": ws_state.has_progress,
                         }
-                        if on_event:
-                            on_event(stall_event)
+                        _dispatch(stall_event)
                         logger.warning(
                             "stall detected in %s — elapsed=%.0fs uncommitted=%d commits_since=%d grace=%s",
                             workspace, elapsed_s, ws_state.uncommitted_files,
@@ -163,12 +189,12 @@ class ClaudeRunner:
                         else:
                             _kill_proc(proc)
                             await proc.wait()
-                            return TurnResult(
+                            return _log_result(TurnResult(
                                 success=False,
                                 usage=None,
                                 message=f"Stall timeout after {elapsed_s:.0f}s with no workspace progress",
                                 stall_info=ws_state,
-                            )
+                            ))
                     continue
 
                 if not raw_line:
@@ -183,12 +209,11 @@ class ClaudeRunner:
                 parsed = parse_stream_event(line)
                 if parsed is not None:
                     result = parsed
-                if on_event:
-                    try:
-                        event = json.loads(line)
-                        on_event(event)
-                    except json.JSONDecodeError:
-                        pass
+                try:
+                    event = json.loads(line)
+                    _dispatch(event)
+                except json.JSONDecodeError:
+                    pass
         finally:
             _kill_proc(proc)
             await proc.wait()
@@ -199,8 +224,8 @@ class ClaudeRunner:
         if proc.returncode != 0 and result is None:
             if stderr_text:
                 logger.debug("claude stderr: %s", stderr_text)
-            return TurnResult(success=False, usage=None, message=f"Exit code {proc.returncode}", stderr=stderr_text)
+            return _log_result(TurnResult(success=False, usage=None, message=f"Exit code {proc.returncode}", stderr=stderr_text))
         if result is None:
-            return TurnResult(success=False, usage=None, message="No result event received", stderr=stderr_text)
+            return _log_result(TurnResult(success=False, usage=None, message="No result event received", stderr=stderr_text))
         result.stderr = stderr_text
-        return result
+        return _log_result(result)
