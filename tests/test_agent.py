@@ -415,3 +415,90 @@ async def test_run_turn_handles_process_already_gone(tmp_path: Path):
                     await task
 
     proc.wait.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# log_path / log_label
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_turn_writes_log_header_and_prompt(tmp_path: Path):
+    log_file = tmp_path / "test.log"
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "Done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        await _runner().run_turn(tmp_path, "my test prompt", False, log_path=log_file, log_label="TestRun")
+
+    content = log_file.read_text()
+    assert "TestRun" in content
+    assert "my test prompt" in content
+    assert "PROMPT:" in content
+
+
+@pytest.mark.asyncio
+async def test_run_turn_writes_events_to_log(tmp_path: Path):
+    log_file = tmp_path / "events.log"
+    lines = [
+        json.dumps({"type": "assistant", "text": "thinking"}),
+        json.dumps({
+            "type": "result", "subtype": "success", "result": "Done",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }),
+    ]
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc(lines))), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        await _runner().run_turn(tmp_path, "prompt", False, log_path=log_file)
+
+    content = log_file.read_text()
+    assert '"type": "assistant"' in content
+    assert "RESULT: success=True" in content
+
+
+@pytest.mark.asyncio
+async def test_run_turn_writes_tokens_to_log(tmp_path: Path):
+    log_file = tmp_path / "tokens.log"
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "Done",
+        "usage": {"input_tokens": 42, "output_tokens": 7},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        await _runner().run_turn(tmp_path, "prompt", False, log_path=log_file)
+
+    content = log_file.read_text()
+    assert "TOKENS: in=42 out=7" in content
+
+
+@pytest.mark.asyncio
+async def test_run_turn_no_log_file_when_path_is_none(tmp_path: Path):
+    event = json.dumps({
+        "type": "result", "subtype": "success", "result": "Done",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc([event]))), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        await _runner().run_turn(tmp_path, "prompt", False)
+
+    assert not list(tmp_path.glob("*.log"))
+
+
+@pytest.mark.asyncio
+async def test_run_turn_still_calls_on_event_when_log_path_set(tmp_path: Path):
+    log_file = tmp_path / "combined.log"
+    lines = [
+        json.dumps({"type": "assistant", "text": "thinking"}),
+        json.dumps({
+            "type": "result", "subtype": "success", "result": "Done",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }),
+    ]
+    seen: list[dict] = []
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_make_proc(lines))), \
+         patch("scale.agent.claude.get_head_sha", AsyncMock(return_value=None)):
+        await _runner().run_turn(tmp_path, "prompt", False, on_event=seen.append, log_path=log_file)
+
+    assert any(e.get("type") == "assistant" for e in seen)
+    assert log_file.exists()

@@ -580,7 +580,13 @@ class Orchestrator:
             pr_url: str = pr["html_url"]
             pr_diff = await self._github.fetch_pr_diff(pr_number)
             worker = ReviewWorker(self._config)
-            result = await worker.run(issue, pr_number=pr_number, pr_url=pr_url, pr_diff=pr_diff)
+            result = await worker.run(
+                issue,
+                pr_number=pr_number,
+                pr_url=pr_url,
+                pr_diff=pr_diff,
+                log_path=self._workspace.path(issue) / "review.log",
+            )
 
             verdict_line = next(
                 (l for l in reversed((result.message or "").splitlines()) if l.startswith("VERDICT:")),

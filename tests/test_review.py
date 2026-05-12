@@ -505,7 +505,7 @@ async def test_review_worker_runs_in_temp_dir():
 
     captured_workspaces: list = []
 
-    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None):
+    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None, **kwargs):
         captured_workspaces.append(workspace)
         from scale.agent.claude import TurnResult
         return TurnResult(success=True, usage=None, message="done")
@@ -528,7 +528,7 @@ async def test_review_worker_passes_correct_model():
 
     captured_models: list = []
 
-    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None):
+    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None, **kwargs):
         captured_models.append(model)
         from scale.agent.claude import TurnResult
         return TurnResult(success=True, usage=None, message="done")
@@ -547,13 +547,37 @@ async def test_review_worker_raises_on_failure():
     worker = ReviewWorker(config)
     issue = _issue()
 
-    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None):
+    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None, **kwargs):
         from scale.agent.claude import TurnResult
         return TurnResult(success=False, usage=None, message="agent error")
 
     with patch.object(worker._runner, "run_turn", side_effect=_mock_run_turn):
         with pytest.raises(RuntimeError, match="Review failed"):
             await worker.run(issue, pr_number=5, pr_url="https://u", pr_diff="diff")
+
+
+@pytest.mark.asyncio
+async def test_review_worker_passes_log_path_to_runner(tmp_path):
+    from scale.worker.review import ReviewWorker
+
+    config = _config_with_review(template="{{ issue.title }}")
+    worker = ReviewWorker(config)
+    issue = _issue()
+
+    captured: list[dict] = []
+
+    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None, **kwargs):
+        captured.append(kwargs)
+        from scale.agent.claude import TurnResult
+        return TurnResult(success=True, usage=None, message="done")
+
+    log_path = tmp_path / "review.log"
+    with patch.object(worker._runner, "run_turn", side_effect=_mock_run_turn):
+        await worker.run(issue, pr_number=5, pr_url="https://u", pr_diff="diff", log_path=log_path)
+
+    assert len(captured) == 1
+    assert captured[0]["log_path"] == log_path
+    assert captured[0]["log_label"] == "Review"
 
 
 @pytest.mark.asyncio
@@ -568,7 +592,7 @@ async def test_review_worker_prompt_contains_pr_context():
 
     captured_prompts: list = []
 
-    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None):
+    async def _mock_run_turn(workspace, prompt, is_continuation, on_event=None, model=None, **kwargs):
         captured_prompts.append(prompt)
         from scale.agent.claude import TurnResult
         return TurnResult(success=True, usage=None, message="done")
