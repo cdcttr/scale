@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from scale.config.schema import CodexConfig, PlannerConfig
-from scale.tracker.github import GitHubClient
+from scale.tracker.base import TrackerClient
 from scale.tracker.models import Issue
 from scale.planner.agent import PlannerAgent
 
@@ -48,7 +48,7 @@ class PlannerRunner:
         self,
         config: PlannerConfig,
         codex: CodexConfig,
-        client: GitHubClient,
+        client: TrackerClient,
         dry_run: bool = False,
     ) -> None:
         self._config = config

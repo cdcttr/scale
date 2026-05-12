@@ -32,7 +32,7 @@ async def _run(workflow_path: Path, port: int | None, console: Console | None = 
 
     config = load_workflow(workflow_path)
     tracker = GitHubClient(config.tracker)
-    orch = Orchestrator(config, tracker)
+    orch = Orchestrator(config, tracker, scm=tracker)
 
     tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
 

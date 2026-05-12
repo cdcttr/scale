@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from scale.agent.claude import ClaudeRunner
 from scale.config.schema import WorkflowConfig
 from scale.prompt.renderer import render_rebase_prompt
-from scale.tracker.github import GitHubClient
+from scale.scm.base import SCMClient
 from scale.tracker.models import Issue
 from scale.workspace.manager import WorkspaceManager
 
@@ -18,11 +18,11 @@ class RebaseWorker:
     def __init__(
         self,
         workspace: WorkspaceManager,
-        github: GitHubClient,
+        scm: SCMClient,
         config: WorkflowConfig,
     ) -> None:
         self._workspace = workspace
-        self._github = github
+        self._scm = scm
         self._config = config
         assert config.rebase is not None
         self._runner = ClaudeRunner(config.codex)
@@ -39,13 +39,13 @@ class RebaseWorker:
         script = f"git fetch origin && git checkout {issue.branch_name}"
         await self._workspace.run_before_hook(issue, script_override=script)
 
-        pr = await self._github.fetch_pr_for_branch(issue.branch_name)
+        pr = await self._scm.fetch_pr_for_branch(issue.branch_name)
         if pr is None:
             logger.warning("No open PR for issue #%d, skipping rebase", issue.number)
             return False
 
-        pr_diff = await self._github.fetch_pr_diff(pr["number"])
-        conflict_context = await self._github.fetch_conflict_context(issue.branch_name)
+        pr_diff = await self._scm.fetch_pr_diff(pr["number"])
+        conflict_context = await self._scm.fetch_conflict_context(issue.branch_name)
 
         log_path = workspace_path / "rebase.log"
 
