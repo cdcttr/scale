@@ -84,6 +84,7 @@ class ReviewConfig(BaseModel):
     timeout_ms: int = 120000
     pr_open_label: str = "scale:pr-open"
     needs_revision_label: str = "scale:needs-revision"
+    no_verdict_label: str = "scale:needs-approval"
     conflict_label: str = "scale:conflict"
     template: str = ""
     merge_label: str = "scale:merge"

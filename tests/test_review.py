@@ -580,3 +580,77 @@ async def test_review_worker_prompt_contains_pr_context():
     assert "Issue #7" in captured_prompts[0]
     assert "PR #42" in captured_prompts[0]
     assert "the diff content" in captured_prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator – no-verdict fallback (infinite loop fix)
+# ---------------------------------------------------------------------------
+
+def test_review_config_no_verdict_label_default():
+    from scale.config.schema import ReviewConfig
+    cfg = ReviewConfig()
+    assert cfg.no_verdict_label == "scale:needs-approval"
+
+
+@pytest.mark.asyncio
+async def test_run_reviewer_no_verdict_applies_needs_approval_and_removes_pr_open():
+    tracker = AsyncMock()
+    config = _config_with_review()
+    orch = Orchestrator(config, tracker)
+
+    issue = _issue(number=3, labels=["scale:pr-open"])
+    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+
+    add_calls: list[tuple] = []
+    remove_calls: list[tuple] = []
+    comment_calls: list[tuple] = []
+
+    with patch.object(orch._github, "fetch_pr_for_branch", AsyncMock(return_value=pr_data)), \
+         patch.object(orch._github, "fetch_pr_diff", AsyncMock(return_value="diff text")), \
+         patch.object(orch._github, "add_labels", AsyncMock(side_effect=lambda n, l: add_calls.append((n, l)))), \
+         patch.object(orch._github, "remove_label", AsyncMock(side_effect=lambda n, l: remove_calls.append((n, l)))), \
+         patch.object(orch._github, "post_comment", AsyncMock(side_effect=lambda n, b: comment_calls.append((n, b)))), \
+         patch("scale.orchestrator.core.ReviewWorker") as MockReviewer:
+        mock_rw = MagicMock()
+        mock_rw.run = AsyncMock(return_value=TurnResult(
+            success=True, usage=None, message="I cannot determine a verdict here."
+        ))
+        MockReviewer.return_value = mock_rw
+        orch._state.claimed.add(issue.id)
+        await orch._run_reviewer(issue)
+
+    assert any("scale:needs-approval" in labels for _, labels in add_calls)
+    assert any((n, lbl) == (issue.number, "scale:pr-open") for n, lbl in remove_calls)
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
+async def test_run_reviewer_no_verdict_releases_claim_so_no_redispatch():
+    tracker = AsyncMock()
+    tracker.fetch_terminal_issues.return_value = []
+    tracker.fetch_candidate_issues.return_value = []
+    tracker.fetch_issues_by_numbers.return_value = []
+
+    config = _config_with_review()
+    orch = Orchestrator(config, tracker)
+
+    issue = _issue(number=5, labels=["scale:pr-open"])
+    pr_data = {"number": 10, "html_url": "https://github.com/o/r/pull/10"}
+
+    reviewer_call_count = 0
+
+    async def _counting_reviewer(iss: object) -> None:
+        nonlocal reviewer_call_count
+        reviewer_call_count += 1
+
+    orch._github = AsyncMock()
+    orch._github.fetch_issues_by_label.return_value = [issue]
+    orch._github.fetch_candidate_issues = AsyncMock(return_value=[])
+
+    with patch.object(orch, "_run_reviewer", side_effect=_counting_reviewer):
+        await orch._tick()
+        await asyncio.sleep(0)
+        await orch._tick()
+        await asyncio.sleep(0)
+
+    assert reviewer_call_count == 1
