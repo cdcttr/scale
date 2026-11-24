@@ -28,11 +28,14 @@ def _setup_logging(level: str, console: Console | None = None) -> None:
 async def _run(workflow_path: Path, port: int | None, console: Console | None = None) -> None:
     from scale.config.loader import load_workflow
     from scale.tracker.github import GitHubClient
+    from scale.tracker import make_tracker
     from scale.orchestrator.core import Orchestrator
 
     config = load_workflow(workflow_path)
-    tracker = GitHubClient(config.tracker)
-    orch = Orchestrator(config, tracker, scm=tracker)
+    tracker = make_tracker(config.tracker)
+    # GitHub issues double as the code host; a beads queue still opens PRs on GitHub.
+    scm = tracker if isinstance(tracker, GitHubClient) else GitHubClient(config.tracker)
+    orch = Orchestrator(config, tracker, scm=scm)
 
     tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
 
@@ -72,7 +75,7 @@ async def _triage(
 ) -> None:
     from scale.config.loader import load_workflow
     from scale.config.schema import TriageConfig
-    from scale.tracker.github import GitHubClient
+    from scale.tracker import make_tracker
     from scale.triage.runner import TriageRunner
 
     config = load_workflow(workflow_path)
@@ -80,7 +83,7 @@ async def _triage(
     if model:
         triage_config = triage_config.model_copy(update={"model": model})
 
-    tracker = GitHubClient(config.tracker)
+    tracker = make_tracker(config.tracker)
     runner = TriageRunner(triage_config, config.codex, tracker, dry_run=dry_run)
 
     if issue_numbers:
@@ -124,12 +127,12 @@ async def _plan(
     force: bool,
 ) -> None:
     from scale.config.loader import load_workflow
-    from scale.tracker.github import GitHubClient
+    from scale.tracker import make_tracker
     from scale.planner.runner import PlannerRunner
 
     config = load_workflow(workflow_path)
     assert config.planner is not None, "planner not configured"
-    tracker = GitHubClient(config.tracker)
+    tracker = make_tracker(config.tracker)
     runner = PlannerRunner(config.planner, config.codex, tracker, dry_run=dry_run)
     issues = await tracker.fetch_issues_by_numbers(issue_numbers)
     await runner.run(issues, force=force)

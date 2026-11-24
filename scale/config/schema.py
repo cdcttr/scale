@@ -4,8 +4,9 @@ from pydantic import BaseModel, Field
 
 
 class TrackerConfig(BaseModel):
-    kind: Literal["github"] = "github"
-    repo: str
+    kind: Literal["github", "beads"] = "github"
+    repo: str                      # GitHub repo (owner/name): issues for kind=github, PRs for both
+    beads_path: Optional[str] = None   # kind=beads: project directory holding .beads
     api_token: str
     default_branch: str = "main"
     active_labels: list[str] = []

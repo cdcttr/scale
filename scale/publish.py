@@ -91,8 +91,8 @@ class Publisher:
             base=self._config.tracker.default_branch,
             title=issue.title,
             body=(
-                f"Closes #{issue.number}\n\n"
-                f"Implements {issue.identifier}: {issue.url}\n\n"
+                (f"Closes #{issue.number}\n\n" if self._config.tracker.kind == "github" else "")
+                + f"Implements {issue.identifier}: {issue.url}\n\n"
                 "_Published by Scale from the agent's commits (publish: orchestrator)._"
             ),
         )
