@@ -29,7 +29,10 @@ PUBLISH_OVERRIDE = (
     "Commit your work to the current git branch when you are done. "
     "Do not push, and do not open a pull request: Scale publishes your commits "
     "and opens the pull request itself. You have no credentials to push with. "
-    "If you cannot finish, say so plainly in your final message instead of committing partial work as done."
+    "\n\nEnd your final message with exactly one status line, on its own line:\n"
+    "- `SCALE-STATUS: done` when your work is committed, or\n"
+    "- `SCALE-STATUS: blocked: <one-line reason>` if you cannot finish. In that case do not "
+    "commit partial work; explain above the status line what blocked you and what you need."
 )
 
 _HELPER = '!f() { echo username=x-access-token; echo "password=$SCALE_GIT_TOKEN"; }; f'

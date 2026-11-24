@@ -179,6 +179,7 @@ class ColimaWorker(Worker):
                     raise RuntimeError(f"agent box {box} exited before the turn finished")
                 await asyncio.sleep(_POLL_S)
 
+            emit({"type": "scale:final", "message": stop.get("last_assistant_message") or ""})
             for t in receipts.glob("transcript-*.jsonl"):
                 for line in t.read_text(errors="replace").splitlines():
                     try:

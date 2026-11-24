@@ -27,6 +27,7 @@ class LiveSession:
     session_id: str = ""
     finishing: bool = False
     stall_info: dict | None = None
+    final_message: str = ""
 
 
 @dataclass

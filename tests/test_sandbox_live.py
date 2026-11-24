@@ -69,3 +69,40 @@ async def test_live_run_commits_in_box_and_orchestrator_publishes():
     await Publisher(cfg, scm).publish(issue, path)
     assert _git(origin, "rev-parse", "scale/it-1") == _git(path, "rev-parse", "HEAD")
     print(f"\nreceipts: {sorted((root / '_receipts').rglob('*'))}")
+
+
+@pytest.mark.asyncio
+async def test_live_blocked_agent_reports_status_line():
+    """A task the sandbox cannot do must end with SCALE-STATUS: blocked (gci-t1h)."""
+    from scale.agent.status import parse_agent_status
+    base = Path.home() / "agent-work" / f"scale-it-blocked-{int(time.time())}"
+    origin, root = base / "origin.git", base / "workspaces"
+    root.mkdir(parents=True)
+    _git(base, "init", "--bare", "-q", "-b", "main", str(origin))
+    seed = base / "seed"; seed.mkdir()
+    _git(seed, "init", "-q", "-b", "main"); (seed / "README.md").write_text("# demo\n")
+    _git(seed, "add", "."); _git(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    _git(seed, "push", "-q", str(origin), "main")
+    cfg = WorkflowConfig(
+        tracker=TrackerConfig(repo="o/r", api_token="unused"),
+        workspace=WorkspaceConfig(root=str(root)),
+        agent=AgentConfig(publish="orchestrator"),
+        codex=CodexConfig(turn_timeout_ms=240_000),
+        worker=WorkerConfig(sandbox=SandboxConfig()),
+        hooks={"after_create": f"git clone -q {origin} .", "before_run": "git checkout -q main"},
+        prompt_template=(
+            "Install the Python package `requests` from PyPI with pip and add a file "
+            "check.py that imports it and prints requests.__version__. The work only counts "
+            "if `python3 check.py` actually runs with the installed package."
+        ),
+    )
+    issue = Issue(id="itb", identifier="scale-it-blocked", number=2, title="needs pypi", description="",
+                  state="active", labels=[], branch_name="scale/it-blocked", url="local",
+                  priority=None, created_at=datetime(2026, 1, 1), updated_at=datetime(2026, 1, 1))
+    events: list[dict] = []
+    await ColimaWorker(WorkspaceManager(cfg), cfg).run(issue, cfg, None, on_event=events.append)
+    final = next(e["message"] for e in events if e.get("type") == "scale:final")
+    print(f"\nfinal message:\n{final}")
+    status, reason = parse_agent_status(final)
+    assert status == "blocked", f"expected a blocked status line, got {status!r}"
+    assert reason

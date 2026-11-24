@@ -47,7 +47,7 @@ class GitHubClient(TrackerClient, SCMClient):
             return "terminal"
         if label_set & set(self._config.terminal_labels):
             return "terminal"
-        if label_set & set(self._config.skip_labels):
+        if label_set & set(self._config.skip_labels) or self._config.blocked_label in label_set:
             return "ignored"
         if self._config.active_labels:
             if not all(l in label_set for l in self._config.active_labels):

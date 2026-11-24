@@ -19,6 +19,7 @@ from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
 from scale.worker.rebase import RebaseWorker
 from scale.publish import Publisher
+from scale.agent.status import parse_agent_status
 from scale.worker.colima import ColimaWorker
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
@@ -76,6 +77,41 @@ class Orchestrator:
             self._ssh_index += 1
             return SSHWorker(host, self._workspace, self._config)
         return LocalWorker(self._workspace, self._config)
+
+    async def _escalate_blocked(self, issue: Issue, attempt: Optional[int], reason: str) -> None:
+        """The agent reported SCALE-STATUS: blocked. Stop and ask a human instead of retrying:
+        label + comment with the agent's own words; publish nothing; keep the workspace."""
+        async with self._lock:
+            session = self._state.running.get(issue.id)
+            if session:
+                session.finishing = True
+            self._state.claimed.discard(issue.id)
+        if session:
+            await self._record_stats(issue, session, success=False, attempt=attempt)
+            await self._post_attempt_summary(issue, session, attempt)
+        label = self._config.tracker.blocked_label
+        message = (session.final_message if session else "").strip()
+        body = "\n".join([
+            "<!-- scale-blocked -->",
+            "",
+            "## Scale: agent blocked",
+            "",
+            f"**Reason:** {reason or '(none given)'}",
+            "",
+            "The agent stopped and asked for help, so Scale did not retry or publish. "
+            "Its workspace is kept for inspection.",
+            f"Remove the `{label}` label (for beads, also reopen the bead) to let Scale try again.",
+            "",
+            "### The agent's final message",
+            "",
+            "> " + message.replace("\n", "\n> "),
+        ])
+        try:
+            await self._tracker.post_comment(issue.number, body)
+            await self._tracker.add_labels(issue.number, [label])
+        except Exception as e:
+            logger.error("Could not record blocked status for issue %s: %s", issue.identifier, e)
+        logger.warning("issue_identifier=%s blocked by agent: %s", issue.identifier, reason)
 
     async def _publish(self, issue: Issue, force: bool = False) -> None:
         """agent.publish=orchestrator: push the agent's commits and open/reuse the PR.
@@ -464,6 +500,8 @@ class Orchestrator:
                         usage.get("output_tokens", 0)
                         + usage.get("cache_creation_input_tokens", 0)
                     )
+                elif event.get("type") == "scale:final":
+                    session.final_message = event.get("message") or ""
                 elif event.get("type") == "scale:stall":
                     session.stall_info = {
                         "elapsed_s": event.get("elapsed_s"),
@@ -480,6 +518,11 @@ class Orchestrator:
                 on_event=on_event,
                 previous_attempt_summary=previous_attempt_summary,
             )
+            live = self._state.running.get(issue.id)
+            status, reason = parse_agent_status(live.final_message if live else "")
+            if status == "blocked":
+                await self._escalate_blocked(issue, attempt, reason or "")
+                return
             await self._publish(issue)
             async with self._lock:
                 session = self._state.running.get(issue.id)

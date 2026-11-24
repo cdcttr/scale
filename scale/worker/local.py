@@ -64,6 +64,8 @@ class LocalWorker(Worker):
                 )
 
                 if result.success:
+                    if on_event and result.message:
+                        on_event({"type": "scale:final", "message": result.message})
                     logger.info(
                         "issue_id=%s issue_identifier=%s turn=%d succeeded",
                         issue.id, issue.identifier, turn_idx + 1,

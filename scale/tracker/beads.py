@@ -79,7 +79,7 @@ class BeadsTracker(TrackerClient):
             return "terminal"
         if status in _IGNORED_STATUSES:
             return "ignored"
-        if labels & set(self._config.skip_labels):
+        if labels & set(self._config.skip_labels) or self._config.blocked_label in labels:
             return "ignored"
         if self._config.active_labels and not all(l in labels for l in self._config.active_labels):
             return "ignored"
@@ -148,6 +148,9 @@ class BeadsTracker(TrackerClient):
             await self._bd("label", "add", bid, label)
         if set(labels) & set(self._config.terminal_labels):
             await self._bd("close", bid, "--reason", "Completed by Scale")
+        elif self._config.blocked_label in labels:
+            # Visible in `bd blocked` / `bd list --status blocked`; a human clears it.
+            await self._bd("update", bid, "--status", "blocked")
 
     async def remove_label(self, number: int, label: str) -> None:
         await self._bd("label", "remove", await self._resolve(number), label)

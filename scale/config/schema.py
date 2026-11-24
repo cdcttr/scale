@@ -12,6 +12,7 @@ class TrackerConfig(BaseModel):
     active_labels: list[str] = []
     skip_labels: list[str] = ["scale:skip"]
     terminal_labels: list[str] = ["scale:done"]
+    blocked_label: str = "scale:blocked"   # set by Scale when an agent reports SCALE-STATUS: blocked
 
 
 class PollingConfig(BaseModel):
