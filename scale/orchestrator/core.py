@@ -327,9 +327,10 @@ class Orchestrator:
                     self._state.total_completed += 1
 
     async def _collect_workspace_state(self, workspace_path: Path) -> dict:
-        result: dict = {"modified_files": [], "new_files": [], "commits": []}
+        result: dict = {"modified_files": [], "uncommitted_files": [], "new_files": [], "commits": []}
         if not workspace_path.exists():
             return result
+        base = f"origin/{self._config.tracker.default_branch}"
 
         async def _git(*args: str) -> str:
             try:
@@ -340,21 +341,25 @@ class Orchestrator:
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-                return stdout.decode().strip()
+                return stdout.decode().rstrip("\n")
             except Exception:
                 return ""
 
-        diff = await _git("diff", "--name-only", "origin/main..HEAD")
+        diff = await _git("diff", "--name-only", f"{base}..HEAD")
         if diff:
             result["modified_files"] = [f for f in diff.splitlines() if f]
 
         status = await _git("status", "--porcelain")
         if status:
-            result["new_files"] = [
-                line[3:] for line in status.splitlines() if line.startswith("?? ")
+            lines = [l for l in status.splitlines() if len(l) > 3]
+            result["new_files"] = [l[3:] for l in lines if l.startswith("?? ")]
+            # Tracked files changed in the working tree or index but not committed
+            # (modified, added, deleted, renamed). Renames report the new path.
+            result["uncommitted_files"] = [
+                l[3:].split(" -> ")[-1] for l in lines if not l.startswith("?? ")
             ]
 
-        log = await _git("log", "--oneline", "origin/main..HEAD")
+        log = await _git("log", "--oneline", f"{base}..HEAD")
         if log:
             result["commits"] = [l for l in log.splitlines() if l]
 
@@ -371,7 +376,7 @@ class Orchestrator:
             state = await self._collect_workspace_state(workspace_path)
         except Exception as exc:
             logger.warning("Failed to collect workspace state for summary: %s", exc)
-            state = {"modified_files": [], "new_files": [], "commits": []}
+            state = {"modified_files": [], "uncommitted_files": [], "new_files": [], "commits": []}
 
         attempt_num = (attempt or 0) + 1
 
@@ -402,13 +407,19 @@ class Orchestrator:
                 lines.append(f"- `{f}`")
             lines.append("")
 
+        if state.get("uncommitted_files"):
+            lines += ["### Uncommitted changes (working tree)"]
+            for f in state["uncommitted_files"]:
+                lines.append(f"- `{f}`")
+            lines.append("")
+
         if state["new_files"]:
             lines += ["### Files created (untracked)"]
             for f in state["new_files"]:
                 lines.append(f"- `{f}`")
             lines.append("")
 
-        if not state["modified_files"] and not state["new_files"] and not state["commits"]:
+        if not any(state.get(k) for k in ("modified_files", "uncommitted_files", "new_files", "commits")):
             lines += ["_No file changes detected._", ""]
 
         comment = "\n".join(lines)
