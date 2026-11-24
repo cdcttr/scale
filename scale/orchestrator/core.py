@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -17,6 +18,9 @@ from scale.tracker.models import Issue
 from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
 from scale.worker.rebase import RebaseWorker
+from scale.publish import Publisher
+from scale.agent.status import parse_agent_status
+from scale.worker.colima import ColimaWorker
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
@@ -28,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     def __init__(self, config: WorkflowConfig, tracker: TrackerClient, scm: Optional[SCMClient] = None) -> None:
+        if config.worker.sandbox is not None and config.agent.publish != "orchestrator":
+            raise ValueError("worker.sandbox requires agent.publish: orchestrator (the box has no credentials to push with)")
+        if config.agent.publish == "orchestrator":
+            if config.worker.ssh_hosts:
+                raise ValueError("agent.publish=orchestrator needs local workspaces; it cannot be combined with worker.ssh_hosts")
+            if scm is None:
+                raise ValueError("agent.publish=orchestrator needs an SCM client to push and open pull requests")
         self._config = config
         self._tracker = tracker
         self._scm = scm
@@ -57,13 +68,61 @@ class Orchestrator:
                     return False
         return True
 
-    def _make_worker(self) -> LocalWorker | SSHWorker:
+    def _make_worker(self) -> LocalWorker | SSHWorker | ColimaWorker:
+        if self._config.worker.sandbox is not None:
+            return ColimaWorker(self._workspace, self._config)
         hosts = self._config.worker.ssh_hosts
         if hosts:
             host = hosts[self._ssh_index % len(hosts)]
             self._ssh_index += 1
             return SSHWorker(host, self._workspace, self._config)
         return LocalWorker(self._workspace, self._config)
+
+    async def _escalate_blocked(self, issue: Issue, attempt: Optional[int], reason: str) -> None:
+        """The agent reported SCALE-STATUS: blocked. Stop and ask a human instead of retrying:
+        label + comment with the agent's own words; publish nothing; keep the workspace."""
+        async with self._lock:
+            session = self._state.running.get(issue.id)
+            if session:
+                session.finishing = True
+            self._state.claimed.discard(issue.id)
+        if session:
+            await self._record_stats(issue, session, success=False, attempt=attempt)
+            await self._post_attempt_summary(issue, session, attempt)
+        label = self._config.tracker.blocked_label
+        message = (session.final_message if session else "").strip()
+        body = "\n".join([
+            "<!-- scale-blocked -->",
+            "",
+            "## Scale: agent blocked",
+            "",
+            f"**Reason:** {reason or '(none given)'}",
+            "",
+            "The agent stopped and asked for help, so Scale did not retry or publish. "
+            "Its workspace is kept for inspection.",
+            f"Remove the `{label}` label (for beads, also reopen the bead) to let Scale try again.",
+            "",
+            "### The agent's final message",
+            "",
+            "> " + message.replace("\n", "\n> "),
+        ])
+        try:
+            await self._tracker.post_comment(issue.number, body)
+            await self._tracker.add_labels(issue.number, [label])
+        except Exception as e:
+            logger.error("Could not record blocked status for issue %s: %s", issue.identifier, e)
+        logger.warning("issue_identifier=%s blocked by agent: %s", issue.identifier, reason)
+
+    async def _publish(self, issue: Issue, force: bool = False) -> None:
+        """agent.publish=orchestrator: push the agent's commits and open/reuse the PR.
+        Raises (e.g. NoChangesError) so a run with nothing committed is not counted as done."""
+        if self._config.agent.publish != "orchestrator" or self._scm is None:
+            return
+        pr = await Publisher(self._config, self._scm).publish(
+            issue, self._workspace.path(issue), force=force
+        )
+        if pr:
+            logger.info("issue_identifier=%s pull request %s", issue.identifier, pr.get("html_url"))
 
     def get_state(self) -> OrchestratorState:
         return self._state
@@ -305,9 +364,10 @@ class Orchestrator:
                     self._state.total_completed += 1
 
     async def _collect_workspace_state(self, workspace_path: Path) -> dict:
-        result: dict = {"modified_files": [], "new_files": [], "commits": []}
+        result: dict = {"modified_files": [], "uncommitted_files": [], "new_files": [], "commits": []}
         if not workspace_path.exists():
             return result
+        base = f"origin/{self._config.tracker.default_branch}"
 
         async def _git(*args: str) -> str:
             try:
@@ -318,21 +378,25 @@ class Orchestrator:
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-                return stdout.decode().strip()
+                return stdout.decode().rstrip("\n")
             except Exception:
                 return ""
 
-        diff = await _git("diff", "--name-only", "origin/main..HEAD")
+        diff = await _git("diff", "--name-only", f"{base}..HEAD")
         if diff:
             result["modified_files"] = [f for f in diff.splitlines() if f]
 
         status = await _git("status", "--porcelain")
         if status:
-            result["new_files"] = [
-                line[3:] for line in status.splitlines() if line.startswith("?? ")
+            lines = [l for l in status.splitlines() if len(l) > 3]
+            result["new_files"] = [l[3:] for l in lines if l.startswith("?? ")]
+            # Tracked files changed in the working tree or index but not committed
+            # (modified, added, deleted, renamed). Renames report the new path.
+            result["uncommitted_files"] = [
+                l[3:].split(" -> ")[-1] for l in lines if not l.startswith("?? ")
             ]
 
-        log = await _git("log", "--oneline", "origin/main..HEAD")
+        log = await _git("log", "--oneline", f"{base}..HEAD")
         if log:
             result["commits"] = [l for l in log.splitlines() if l]
 
@@ -349,7 +413,7 @@ class Orchestrator:
             state = await self._collect_workspace_state(workspace_path)
         except Exception as exc:
             logger.warning("Failed to collect workspace state for summary: %s", exc)
-            state = {"modified_files": [], "new_files": [], "commits": []}
+            state = {"modified_files": [], "uncommitted_files": [], "new_files": [], "commits": []}
 
         attempt_num = (attempt or 0) + 1
 
@@ -380,13 +444,19 @@ class Orchestrator:
                 lines.append(f"- `{f}`")
             lines.append("")
 
+        if state.get("uncommitted_files"):
+            lines += ["### Uncommitted changes (working tree)"]
+            for f in state["uncommitted_files"]:
+                lines.append(f"- `{f}`")
+            lines.append("")
+
         if state["new_files"]:
             lines += ["### Files created (untracked)"]
             for f in state["new_files"]:
                 lines.append(f"- `{f}`")
             lines.append("")
 
-        if not state["modified_files"] and not state["new_files"] and not state["commits"]:
+        if not any(state.get(k) for k in ("modified_files", "uncommitted_files", "new_files", "commits")):
             lines += ["_No file changes detected._", ""]
 
         comment = "\n".join(lines)
@@ -430,6 +500,8 @@ class Orchestrator:
                         usage.get("output_tokens", 0)
                         + usage.get("cache_creation_input_tokens", 0)
                     )
+                elif event.get("type") == "scale:final":
+                    session.final_message = event.get("message") or ""
                 elif event.get("type") == "scale:stall":
                     session.stall_info = {
                         "elapsed_s": event.get("elapsed_s"),
@@ -446,6 +518,12 @@ class Orchestrator:
                 on_event=on_event,
                 previous_attempt_summary=previous_attempt_summary,
             )
+            live = self._state.running.get(issue.id)
+            status, reason = parse_agent_status(live.final_message if live else "")
+            if status == "blocked":
+                await self._escalate_blocked(issue, attempt, reason or "")
+                return
+            await self._publish(issue)
             async with self._lock:
                 session = self._state.running.get(issue.id)
                 if session:
@@ -617,7 +695,19 @@ class Orchestrator:
                 await self._tracker.add_labels(issue.number, [review.no_verdict_label])
                 await self._tracker.remove_label(issue.number, review.pr_open_label)
         except Exception as e:
-            logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
+            tb = traceback.format_exc()
+            logger.error("Reviewer failed for issue #%d: %s\n%s", issue.number, e, tb)
+            # Reporting must not block cleanup: if the tracker is down, still clear pr-open.
+            try:
+                await self._tracker.post_comment(
+                    issue.number,
+                    f"**Review failed:** `{type(e).__name__}: {e}`\n\n```\n{tb}```",
+                )
+                await self._tracker.add_labels(issue.number, [review.needs_revision_label])
+            except Exception as report_err:
+                logger.error(
+                    "Could not report reviewer failure for issue #%d: %s", issue.number, report_err
+                )
             await self._tracker.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
@@ -687,6 +777,7 @@ class Orchestrator:
             pr_diff = await self._scm.fetch_pr_diff(pr["number"])
             worker = FeedbackWorker(self._workspace, self._config)
             await worker.run(issue, pr_diff=pr_diff, pr_comments=comments)
+            await self._publish(issue)
             logger.info("Feedback worker completed for issue #%d", issue.number)
         except Exception as e:
             logger.error("Feedback worker failed for issue #%d: %s", issue.number, e)
@@ -808,6 +899,7 @@ class Orchestrator:
             success = await worker.run(issue, on_event=_on_event)
 
             if success:
+                await self._publish(issue, force=True)
                 await self._tracker.remove_label(issue.number, rebase_cfg.conflict_label)
                 if self._config.review and self._scm is not None:
                     await self._tracker.add_labels(issue.number, [self._config.review.pr_open_label])

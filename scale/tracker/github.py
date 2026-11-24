@@ -47,7 +47,7 @@ class GitHubClient(TrackerClient, SCMClient):
             return "terminal"
         if label_set & set(self._config.terminal_labels):
             return "terminal"
-        if label_set & set(self._config.skip_labels):
+        if label_set & set(self._config.skip_labels) or self._config.blocked_label in label_set:
             return "ignored"
         if self._config.active_labels:
             if not all(l in label_set for l in self._config.active_labels):
@@ -330,6 +330,16 @@ class GitHubClient(TrackerClient, SCMClient):
             msg = c.get("commit", {}).get("message", "").splitlines()[0]
             lines.append(f"{sha} {msg}")
         return "\n".join(lines)
+
+    async def create_pr(self, head: str, base: str, title: str, body: str) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/pulls",
+                headers=self._headers,
+                json={"head": head, "base": base, "title": title, "body": body},
+            )
+            r.raise_for_status()
+            return r.json()
 
     async def merge_pr(self, pr_number: int) -> None:
         async with httpx.AsyncClient(timeout=30) as client:

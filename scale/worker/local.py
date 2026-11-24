@@ -7,6 +7,7 @@ from scale.config.schema import WorkflowConfig
 from scale.prompt.renderer import render_prompt
 from scale.tracker.models import Issue
 from scale.worker.base import Worker
+from scale.publish import apply_publish_mode
 from scale.workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,13 @@ class LocalWorker(Worker):
         try:
             for turn_idx in range(config.agent.max_turns):
                 is_continuation = turn_idx > 0
-                prompt = (
+                prompt = apply_publish_mode(
                     _CONTINUATION_PROMPT
                     if is_continuation
                     else render_prompt(
                         config.prompt_template, issue, attempt, previous_attempt_summary
-                    )
+                    ),
+                    config,
                 )
 
                 logger.info(
@@ -62,6 +64,8 @@ class LocalWorker(Worker):
                 )
 
                 if result.success:
+                    if on_event and result.message:
+                        on_event({"type": "scale:final", "message": result.message})
                     logger.info(
                         "issue_id=%s issue_identifier=%s turn=%d succeeded",
                         issue.id, issue.identifier, turn_idx + 1,

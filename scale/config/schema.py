@@ -4,13 +4,15 @@ from pydantic import BaseModel, Field
 
 
 class TrackerConfig(BaseModel):
-    kind: Literal["github"] = "github"
-    repo: str
+    kind: Literal["github", "beads"] = "github"
+    repo: str                      # GitHub repo (owner/name): issues for kind=github, PRs for both
+    beads_path: Optional[str] = None   # kind=beads: project directory holding .beads
     api_token: str
     default_branch: str = "main"
     active_labels: list[str] = []
     skip_labels: list[str] = ["scale:skip"]
     terminal_labels: list[str] = ["scale:done"]
+    blocked_label: str = "scale:blocked"   # set by Scale when an agent reports SCALE-STATUS: blocked
 
 
 class PollingConfig(BaseModel):
@@ -38,6 +40,9 @@ class AgentConfig(BaseModel):
     completed_display_s: int = 300
     supervised_label: str = "scale:supervised"
     auto_merge: bool = False
+    # "agent": the agent pushes and opens the PR itself (needs credentials in its workspace).
+    # "orchestrator": the agent only commits; Scale pushes and opens the PR (scale/publish.py).
+    publish: Literal["agent", "orchestrator"] = "agent"
 
 
 class CodexConfig(BaseModel):
@@ -55,9 +60,30 @@ class ServerConfig(BaseModel):
     api_token: str
 
 
+class SandboxConfig(BaseModel):
+    """Run each agent in a disposable container in a Colima VM (scale/worker/colima.py).
+
+    The box gets only its workspace and a receipts folder; no credentials. Model
+    calls go through agent-gate, which holds the real credential.
+    """
+    kind: Literal["colima"] = "colima"
+    docker_context: str = "colima-agents"
+    image: str = "agent-box"
+    network: str = "agents-internal"          # --internal network; agent-gate is the only way out
+    share_root: str = "~/agent-work"          # the only host folder the VM can see
+    agent_command: str = "claude --dangerously-skip-permissions"
+    box_env: dict[str, str] = {"ANTHROPIC_AUTH_TOKEN": "dummy-not-a-secret"}
+    cpus: str = "2"
+    memory: str = "4g"
+    pids_limit: int = 512
+    start_timeout_s: float = 60.0
+    keep_box: bool = False                    # leave the box running after the turn (for inspection)
+
+
 class WorkerConfig(BaseModel):
     ssh_hosts: list[str] = []
     max_concurrent_agents_per_host: int = 3
+    sandbox: Optional[SandboxConfig] = None
 
 
 class TriageConfig(BaseModel):

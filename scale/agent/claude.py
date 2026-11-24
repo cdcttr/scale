@@ -95,6 +95,7 @@ class ClaudeRunner:
         log_label: str = "Turn",
     ) -> TurnResult:
         if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as f:
                 f.write(f"\n{'=' * 60}\n")
                 f.write(f"{log_label} — {datetime.now(timezone.utc).isoformat()}\n")

@@ -29,6 +29,10 @@ hooks:
 agent:
   max_concurrent_agents: 2
   max_turns: 20
+  # publish: orchestrator   # agent only commits; Scale pushes the branch and opens the PR
+  #                          # with its own token (keeps credentials out of the agent's workspace).
+  #                          # Clone WITHOUT a token in the URL, e.g. in after_create:
+  #                          #   git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f' clone https://github.com/your-org/your-repo.git .
 
 # Uncomment to enable automated triage (pre-screens issues before dispatch):
 # triage:

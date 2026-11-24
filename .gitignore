@@ -12,3 +12,6 @@ logs/
 !scale/logs/
 stats.jsonl
 .coverage
+
+# direnv: local secrets (GITHUB_TOKEN)
+.envrc
