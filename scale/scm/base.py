@@ -25,3 +25,7 @@ class SCMClient(ABC):
 
     @abstractmethod
     async def merge_pr(self, pr_number: int) -> None: ...
+
+    async def create_pr(self, head: str, base: str, title: str, body: str) -> dict:
+        """Open a pull request; used by orchestrator-side publishing."""
+        raise NotImplementedError(f"{type(self).__name__} does not support create_pr")

@@ -7,6 +7,7 @@ from scale.config.schema import WorkflowConfig
 from scale.prompt.renderer import render_feedback_prompt
 from scale.tracker.models import Issue
 from scale.workspace.manager import WorkspaceManager
+from scale.publish import apply_publish_mode
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class FeedbackWorker:
             pr_diff=pr_diff,
             pr_comments=pr_comments,
         )
+        prompt = apply_publish_mode(prompt, self._config)
 
         try:
             result = await self._runner.run_turn(

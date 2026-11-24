@@ -331,6 +331,16 @@ class GitHubClient(TrackerClient, SCMClient):
             lines.append(f"{sha} {msg}")
         return "\n".join(lines)
 
+    async def create_pr(self, head: str, base: str, title: str, body: str) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/pulls",
+                headers=self._headers,
+                json={"head": head, "base": base, "title": title, "body": body},
+            )
+            r.raise_for_status()
+            return r.json()
+
     async def merge_pr(self, pr_number: int) -> None:
         async with httpx.AsyncClient(timeout=30) as client:
             # GET the PR to trigger GitHub's async mergeability computation.

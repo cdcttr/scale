@@ -17,6 +17,7 @@ from scale.tracker.models import Issue
 from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
 from scale.worker.rebase import RebaseWorker
+from scale.publish import Publisher
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
@@ -28,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     def __init__(self, config: WorkflowConfig, tracker: TrackerClient, scm: Optional[SCMClient] = None) -> None:
+        if config.agent.publish == "orchestrator":
+            if config.worker.ssh_hosts:
+                raise ValueError("agent.publish=orchestrator needs local workspaces; it cannot be combined with worker.ssh_hosts")
+            if scm is None:
+                raise ValueError("agent.publish=orchestrator needs an SCM client to push and open pull requests")
         self._config = config
         self._tracker = tracker
         self._scm = scm
@@ -64,6 +70,17 @@ class Orchestrator:
             self._ssh_index += 1
             return SSHWorker(host, self._workspace, self._config)
         return LocalWorker(self._workspace, self._config)
+
+    async def _publish(self, issue: Issue, force: bool = False) -> None:
+        """agent.publish=orchestrator: push the agent's commits and open/reuse the PR.
+        Raises (e.g. NoChangesError) so a run with nothing committed is not counted as done."""
+        if self._config.agent.publish != "orchestrator" or self._scm is None:
+            return
+        pr = await Publisher(self._config, self._scm).publish(
+            issue, self._workspace.path(issue), force=force
+        )
+        if pr:
+            logger.info("issue_identifier=%s pull request %s", issue.identifier, pr.get("html_url"))
 
     def get_state(self) -> OrchestratorState:
         return self._state
@@ -446,6 +463,7 @@ class Orchestrator:
                 on_event=on_event,
                 previous_attempt_summary=previous_attempt_summary,
             )
+            await self._publish(issue)
             async with self._lock:
                 session = self._state.running.get(issue.id)
                 if session:
@@ -687,6 +705,7 @@ class Orchestrator:
             pr_diff = await self._scm.fetch_pr_diff(pr["number"])
             worker = FeedbackWorker(self._workspace, self._config)
             await worker.run(issue, pr_diff=pr_diff, pr_comments=comments)
+            await self._publish(issue)
             logger.info("Feedback worker completed for issue #%d", issue.number)
         except Exception as e:
             logger.error("Feedback worker failed for issue #%d: %s", issue.number, e)
@@ -808,6 +827,7 @@ class Orchestrator:
             success = await worker.run(issue, on_event=_on_event)
 
             if success:
+                await self._publish(issue, force=True)
                 await self._tracker.remove_label(issue.number, rebase_cfg.conflict_label)
                 if self._config.review and self._scm is not None:
                     await self._tracker.add_labels(issue.number, [self._config.review.pr_open_label])

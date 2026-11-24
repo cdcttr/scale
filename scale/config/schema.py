@@ -38,6 +38,9 @@ class AgentConfig(BaseModel):
     completed_display_s: int = 300
     supervised_label: str = "scale:supervised"
     auto_merge: bool = False
+    # "agent": the agent pushes and opens the PR itself (needs credentials in its workspace).
+    # "orchestrator": the agent only commits; Scale pushes and opens the PR (scale/publish.py).
+    publish: Literal["agent", "orchestrator"] = "agent"
 
 
 class CodexConfig(BaseModel):
