@@ -58,9 +58,30 @@ class ServerConfig(BaseModel):
     api_token: str
 
 
+class SandboxConfig(BaseModel):
+    """Run each agent in a disposable container in a Colima VM (scale/worker/colima.py).
+
+    The box gets only its workspace and a receipts folder; no credentials. Model
+    calls go through agent-gate, which holds the real credential.
+    """
+    kind: Literal["colima"] = "colima"
+    docker_context: str = "colima-agents"
+    image: str = "agent-box"
+    network: str = "agents-internal"          # --internal network; agent-gate is the only way out
+    share_root: str = "~/agent-work"          # the only host folder the VM can see
+    agent_command: str = "claude --dangerously-skip-permissions"
+    box_env: dict[str, str] = {"ANTHROPIC_AUTH_TOKEN": "dummy-not-a-secret"}
+    cpus: str = "2"
+    memory: str = "4g"
+    pids_limit: int = 512
+    start_timeout_s: float = 60.0
+    keep_box: bool = False                    # leave the box running after the turn (for inspection)
+
+
 class WorkerConfig(BaseModel):
     ssh_hosts: list[str] = []
     max_concurrent_agents_per_host: int = 3
+    sandbox: Optional[SandboxConfig] = None
 
 
 class TriageConfig(BaseModel):

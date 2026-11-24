@@ -18,6 +18,7 @@ from scale.worker.feedback import FeedbackWorker
 from scale.worker.local import LocalWorker
 from scale.worker.rebase import RebaseWorker
 from scale.publish import Publisher
+from scale.worker.colima import ColimaWorker
 from scale.worker.review import ReviewWorker
 from scale.worker.ssh import SSHWorker
 from scale.workspace.manager import WorkspaceManager
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     def __init__(self, config: WorkflowConfig, tracker: TrackerClient, scm: Optional[SCMClient] = None) -> None:
+        if config.worker.sandbox is not None and config.agent.publish != "orchestrator":
+            raise ValueError("worker.sandbox requires agent.publish: orchestrator (the box has no credentials to push with)")
         if config.agent.publish == "orchestrator":
             if config.worker.ssh_hosts:
                 raise ValueError("agent.publish=orchestrator needs local workspaces; it cannot be combined with worker.ssh_hosts")
@@ -63,7 +66,9 @@ class Orchestrator:
                     return False
         return True
 
-    def _make_worker(self) -> LocalWorker | SSHWorker:
+    def _make_worker(self) -> LocalWorker | SSHWorker | ColimaWorker:
+        if self._config.worker.sandbox is not None:
+            return ColimaWorker(self._workspace, self._config)
         hosts = self._config.worker.ssh_hosts
         if hosts:
             host = hosts[self._ssh_index % len(hosts)]
