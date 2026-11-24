@@ -1720,6 +1720,51 @@ async def test_run_reviewer_clears_secondary_on_error():
 
 
 @pytest.mark.asyncio
+async def test_run_reviewer_posts_comment_and_label_on_error():
+    tracker = AsyncMock()
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
+        mock_rw = MagicMock()
+        mock_rw.run = AsyncMock(side_effect=RuntimeError("boom"))
+        MockRW.return_value = mock_rw
+        await orch._run_reviewer(issue)
+
+    comment_calls = [str(c) for c in tracker.post_comment.call_args_list]
+    assert any("Review failed" in c and "RuntimeError" in c and "boom" in c for c in comment_calls)
+    assert any("Traceback" in c for c in comment_calls)
+    tracker.add_labels.assert_any_call(issue.number, ["scale:needs-revision"])
+
+
+@pytest.mark.asyncio
+async def test_run_reviewer_error_still_clears_pr_open_when_reporting_fails():
+    tracker = AsyncMock()
+    tracker.post_comment = AsyncMock(side_effect=RuntimeError("tracker down"))
+    scm = AsyncMock()
+    scm.fetch_pr_for_branch = AsyncMock(return_value={"number": 10, "html_url": "http://pr"})
+    scm.fetch_pr_diff = AsyncMock(return_value="diff")
+    orch = Orchestrator(_config_with_review(), tracker, scm=scm)
+
+    issue = _issue()
+    orch._state.claimed.add(issue.id)
+
+    with patch("scale.orchestrator.core.ReviewWorker") as MockRW:
+        mock_rw = MagicMock()
+        mock_rw.run = AsyncMock(side_effect=RuntimeError("boom"))
+        MockRW.return_value = mock_rw
+        await orch._run_reviewer(issue)
+
+    tracker.remove_label.assert_any_call(issue.number, "scale:pr-open")
+    assert issue.id not in orch._state.claimed
+
+
+@pytest.mark.asyncio
 async def test_run_feedback_worker_sets_secondary_during_run():
     tracker = AsyncMock()
     scm = AsyncMock()

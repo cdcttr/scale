@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -651,7 +652,19 @@ class Orchestrator:
                 await self._tracker.add_labels(issue.number, [review.no_verdict_label])
                 await self._tracker.remove_label(issue.number, review.pr_open_label)
         except Exception as e:
-            logger.error("Reviewer failed for issue #%d: %s", issue.number, e)
+            tb = traceback.format_exc()
+            logger.error("Reviewer failed for issue #%d: %s\n%s", issue.number, e, tb)
+            # Reporting must not block cleanup: if the tracker is down, still clear pr-open.
+            try:
+                await self._tracker.post_comment(
+                    issue.number,
+                    f"**Review failed:** `{type(e).__name__}: {e}`\n\n```\n{tb}```",
+                )
+                await self._tracker.add_labels(issue.number, [review.needs_revision_label])
+            except Exception as report_err:
+                logger.error(
+                    "Could not report reviewer failure for issue #%d: %s", issue.number, report_err
+                )
             await self._tracker.remove_label(issue.number, review.pr_open_label)
         finally:
             async with self._lock:
